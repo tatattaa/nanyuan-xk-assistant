@@ -1,0 +1,1171 @@
+/* ==========================================================================
+   南苑抢课助手 · 样式
+   纯原生 CSS，零外部依赖（无 CDN、无字体外链）。
+   响应式：手机浏览器访问局域网地址时自动单列。
+   ========================================================================== */
+
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --border: #e3e6ea;
+  --text: #1f2329;
+  --text-2: #6b7280;
+  --text-3: #9aa1ab;
+  --accent: #2f6feb;
+  --accent-weak: #eaf1fe;
+  /* 比 --accent-weak 稍重一档：给「可点选」的悬停底色用，
+     免得跟拨轮中间那个选中框（--accent-weak）糊成一片。 */
+  --accent-tint: #dbe7fd;
+  --green: #17a34a;
+  --green-weak: #e8f6ed;
+  --red: #d93025;
+  --red-weak: #fdecea;
+  --amber: #c07d00;
+  --amber-weak: #fdf4e3;
+  --radius: 10px;
+  --radius-sm: 6px;
+  /* ⭐ 拨轮单格高度。**唯一权威在 JS 那边**（`app.js::WHEEL_H`，它要拿它做滚动位置的除法），
+     这里是它的**镜像** —— 改一处必须改另一处。
+     CSS 内部一律用这个变量，别再写字面量：选中框高度、数字格高、行高**必须是同一个数**，
+     否则会出现「选中的那一格与中间框差半个像素」这种没法解释的偏移。 */
+  --wheel-h: 28px;
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- 布局 ---------- */
+
+.topbar {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  flex-wrap: wrap;
+}
+.topbar h1 { font-size: 16px; margin: 0; font-weight: 600; }
+.topbar .sub { color: var(--text-3); font-size: 12px; }
+.topbar .spacer { flex: 1; }
+
+.wrap {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 18px 20px 60px;
+  display: grid;
+  gap: 16px;
+}
+
+/* ⭐ 访问口令门（2026-10-01）：开启口令保护时的第一道门。全屏遮罩，
+   盖住登录门与主体，输对口令才放行。 */
+.access-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--bg);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 10vh;
+  overflow-y: auto;
+}
+.access-gate .login-card {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 20px;
+}
+
+/* ⭐ 登录门（2026-10-01）：未登录时只显示这一张登录卡，居中摆放在页面中央。
+   登录成功后由 renderGate() 隐藏本门、显示 #mainApp。
+   ⭐ 只保留学号 + 密码（账号密码登录），Cookie/CDP 已移除。 */
+.gate {
+  max-width: 420px;
+  margin: 10vh auto 0;
+  padding: 0 20px 60px;
+}
+
+.login-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 30px rgba(16, 24, 40, .08);
+  padding: 36px 34px 28px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+.login-logo {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  flex-shrink: 0;
+  display: block;
+}
+img.login-logo {
+  object-fit: contain;  /* SVG 自带圆角方块底，直接等比缩放即可 */
+  filter: drop-shadow(0 2px 6px rgba(47, 111, 235, 0.35));
+}
+.login-brand h2 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 1px;
+}
+.login-sub {
+  margin: 2px 0 0;
+  font-size: 13px;
+  color: var(--text-2);
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.login-field > span {
+  font-size: 13px;
+  color: var(--text-2);
+  font-weight: 500;
+}
+.login-field input {
+  width: 100%;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  font-size: 15px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+.login-field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 111, 235, .12);
+}
+.login-btn {
+  width: 100%;
+  padding: 11px;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 6px;
+  border-radius: 9px;
+  margin-top: 4px;
+}
+
+.login-note {
+  margin-top: 20px;
+  font-size: 12px;
+  color: var(--text-3);
+  text-align: center;
+}
+.login-msg {
+  margin-top: 12px;
+  min-height: 20px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.cols {
+  display: grid;
+  grid-template-columns: 3fr 7fr;
+  gap: 16px;
+  align-items: start;
+}
+
+/* ⭐ 两列布局（2026-10-01 定稿，3:7）：
+   · 左列（3fr）：「筛选课程」→「抢课清单」纵向堆叠；
+   · 右列（7fr）：「搜索课程」一张卡（搜索框在上、结果在下），占大头。
+   实现：卡片按列定位（自动流 + 固定列），不套 wrapper div，挪卡片只改 class。 */
+.cols > .card.col-left { grid-column: 1; }
+.cols > .card.col-right { grid-column: 2; }
+
+/* ⭐ 抢课清单 + 蹲课 五五并排（2026-10-01 用户要求，**以全局宽度为参照**）：
+   一个 `.subcols` 容器**横跨整行**（grid-column: 1 / -1，覆盖左右两列的总宽），
+   内部两张卡横排、各占全局的一半（grid-template-columns: 1fr 1fr）。
+   ⚠️ 不再以「筛选课程所在的左列」为参照 —— 用户明确要求按**全局**五五开。 */
+.cols > .subcols {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 820px) {
+  .cols { grid-template-columns: 1fr; }
+  /* 单列时所有卡片都回到自然流（去掉固定列，否则会叠在同一格） */
+  .cols > .card.col-left,
+  .cols > .card.col-right,
+  .cols > .subcols { grid-column: auto; }
+  .wrap { padding: 12px 12px 50px; }
+  .topbar { padding: 10px 12px; }
+}
+
+/* ---------- 卡片 ---------- */
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.card > header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.card > header .spacer { flex: 1; }
+.card > .body { padding: 14px 16px; }
+.card > .body.tight { padding: 0; }
+
+.step {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  flex: none;
+}
+
+/* ---------- 表单控件 ---------- */
+
+label.field { display: block; margin-bottom: 12px; }
+label.field > span {
+  display: block;
+  font-size: 12px;
+  color: var(--text-2);
+  margin-bottom: 5px;
+}
+
+input[type=text], input[type=number], textarea, select {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: inherit;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+  transition: border-color .15s, box-shadow .15s;
+}
+input:focus, textarea:focus, select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(47, 111, 235, .12);
+}
+textarea { resize: vertical; min-height: 74px; font-family: var(--mono); font-size: 12px; }
+
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.row > .grow { flex: 1; min-width: 140px; }
+
+/* ---------- 筛选器（复刻教务选课页「筛选」面板） ---------- */
+
+.filter-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 10px;
+  align-items: center;
+}
+.filter-grid .flabel {
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+  text-align: right;
+}
+/* 上课星期 / 节次的「多选 chips」行 */
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip {
+  min-width: 30px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  text-align: center;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.chip:hover { background: var(--bg); color: var(--text); }
+.chip.on {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+.filter-actions { display: flex; gap: 8px; margin-top: 10px; }
+/* 筛选器里宽度有限的输入框/下拉 */
+.fsel { max-width: 130px; }
+
+/* ---------- 按钮 ---------- */
+
+button {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  padding: 7px 13px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background .15s, border-color .15s, opacity .15s;
+  white-space: nowrap;
+}
+button:hover:not(:disabled) { background: #f7f8fa; }
+button:disabled { opacity: .45; cursor: not-allowed; }
+
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.primary:hover:not(:disabled) { background: #2a63d4; }
+button.danger { background: var(--red); border-color: var(--red); color: #fff; }
+button.danger:hover:not(:disabled) { background: #bf2a20; }
+button.tiny { padding: 3px 8px; font-size: 12px; }
+
+/* ---------- 状态胶囊 ---------- */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: var(--bg);
+  color: var(--text-2);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.pill.ok    { background: var(--green-weak); color: var(--green); border-color: #bfe5cb; }
+.pill.err   { background: var(--red-weak);   color: var(--red);   border-color: #f5c6c2; }
+.pill.warn  { background: var(--amber-weak); color: var(--amber); border-color: #f0dcae; }
+.pill.info  { background: var(--accent-weak);color: var(--accent);border-color: #c9dbfb; }
+/* 已抢：能退课 = 抢到手，绿色（与课表格子 .slot.won 一套配色） */
+.pill.won   { background: var(--green-weak); color: var(--green); border-color: #bfe5cb; font-weight: 600; }
+/* 顶部「学期信息」胶囊：学年/学期/轮次 + 选课时间，用品牌色弱底区分其它状态胶囊 */
+.pill.semester { background: var(--accent-weak); color: var(--accent); border-color: #c9dbfb; max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
+.pill.semester.muted { background: var(--bg); color: var(--text-3); border-color: var(--border); }
+
+/* 已抢 / 已选 分组标题（用户 2026-09-30 要求的「已抢」分类） */
+.sel-group + .sel-group { margin-top: 6px; }
+.sel-group-h {
+  padding: 8px 16px 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: .5px;
+  background: #fafbfc;
+  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+}
+.sel-group:first-child .sel-group-h { border-top: none; }
+
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.dot.pulse { animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+/* ---------- 列表 ---------- */
+
+.list { max-height: 340px; overflow-y: auto; }
+.list .item {
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.list .item:last-child { border-bottom: none; }
+.list .item .main { flex: 1; min-width: 0; }
+/* 用 flex 而不是让课程名和徽章靠 HTML 空白折叠 —— 空白折叠的间距随源码换行变，
+   不可控；flex gap 才有确定的间距。
+   ⚠️ 这里 gap 要与 .sel-item .nm 保持一致（都是 6px），
+   否则同一枚徽章在两处跟课程名的距离会不一样。 */
+.list .item .title {
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.list .item .meta { font-size: 12px; color: var(--text-3); margin-top: 2px; }
+.list .item .actions { flex: none; }
+
+/* 整格可点的课程条目：点条格任意处 == 点右侧「选班」。
+   展开出来的教学班列表在 .classes 里，点它**不该**收起，由 JS 那边排除。 */
+.list .item.clickable { cursor: pointer; transition: background .12s ease; }
+.list .item.clickable:hover { background: var(--accent-weak); }
+.list .item.clickable:active { background: #dee9fd; }
+
+/* ---------- 学分徽章 ----------
+   已选列表那一行本来就挤了「自选否 / 开课类别 / 时段数」好几个灰胶囊，
+   学分再混进去当第三个灰胶囊就完全看不出重点了。
+   所以学分单独做一种「徽章」：数字更大更粗、用强调色，扫一眼就能抓住。 */
+.xf-badge {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  /* 跟课程名之间留口气。徽章是强调色 + 加粗，紧贴名字会黏成一坨读起来累；
+     左边距是叠在所在 flex 容器的 gap 之上的（6 + 8 = 14px）。
+     只加左边距、不动容器的 gap —— 那样会连带把其它状态胶囊也推稀。 */
+  margin-left: 8px;
+  padding: 1px 7px 2px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--accent);
+  background: var(--accent-weak);
+  border: 1px solid #c9dbfb;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.xf-badge em {
+  font-style: normal;
+  font-size: 10px;
+  font-weight: 500;
+  opacity: .75;
+  margin-left: 1px;
+}
+
+.empty {
+  padding: 26px 16px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+/* ---------- 进度条 ---------- */
+
+.bar {
+  height: 6px;
+  background: var(--bg);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-top: 6px;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  width: 0;
+  transition: width .3s;
+}
+.bar > i.ok { background: var(--green); }
+
+/* ---------- 日志 ---------- */
+
+.log {
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.75;
+  max-height: 300px;
+  overflow-y: auto;
+  background: #1d2129;
+  color: #d7dbe0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+.log .ln { display: flex; gap: 8px; }
+.log .t  { color: #6b737e; flex: none; }
+.log .m  { word-break: break-word; }
+.log .m.ok   { color: #4ade80; }
+.log .m.err  { color: #f87171; }
+.log .m.warn { color: #fbbf24; }
+.log .m.info { color: #93c5fd; }
+
+/* ---------- 提示条 ---------- */
+
+.note {
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  line-height: 1.6;
+}
+.note.warn { background: var(--amber-weak); border-color: #f0dcae; color: #8a5a00; }
+.note.ok   { background: var(--green-weak); border-color: #bfe5cb; color: #1c6b3a; }
+.note.info { background: var(--accent-weak); border-color: #c9dbfb; color: #1d4fa8; }
+.note code { font-family: var(--mono); background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; }
+
+/* 骨架 */
+.muted { color: var(--text-3); font-size: 12px; }
+.hidden { display: none !important; }
+
+/* ---------- 课表 ---------- */
+
+.legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.legend .lg {
+  width: 11px; height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 3px;
+  vertical-align: -1px;
+}
+.legend .lg.won   { background: #bfe7cb; }   /* 已抢（能退课）= 绿 */
+.legend .lg.sel   { background: #bcd3fb; }   /* 已选（教务锁定、不可退）= 蓝 */
+.legend .lg.pend  { background: #f2d9a6; }
+.legend .lg.mutex { background: #f2d9a6; border: 1px dashed #c07d00; }
+.legend .lg.hard  { background: #f3b8b2; border: 1px solid #d93025; }
+.legend .lg.soft  { background: #f7e6c4; border: 1px dashed #d9a44a; }
+
+.tt-wrap { overflow-x: auto; }
+
+/* ---------- 学业情况统计表格（课程表上方） ---------- */
+.academic-wrap { font-size: 13px; }
+.academic-wrap .acad-info,
+.academic-wrap .acad-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-bottom: 8px;
+}
+.academic-wrap .acad-info .kv { display: inline-flex; align-items: baseline; gap: 4px; }
+.academic-wrap .acad-info b { color: var(--text); font-weight: 600; }
+.academic-wrap .acad-summary .kv { display: inline-flex; align-items: baseline; gap: 4px; }
+.academic-wrap .acad-summary b { color: var(--accent); font-weight: 600; font-variant-numeric: tabular-nums; }
+.academic-wrap .sep { color: var(--text-3); }
+.academic-wrap .tt-scroll { overflow-x: auto; margin-top: 6px; }
+.academic-wrap table.acad-table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 12px;
+}
+.academic-wrap table.acad-table th,
+.academic-wrap table.acad-table td {
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  text-align: center;
+  white-space: nowrap;
+}
+.academic-wrap table.acad-table thead th {
+  background: var(--bg);
+  font-weight: 600;
+  color: var(--text-2);
+}
+.academic-wrap table.acad-table td.acad-label {
+  background: var(--bg);
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+}
+
+.tt {
+  width: 100%;
+  min-width: 780px;   /* 7 列 + 节次列；太窄课程名会挤成竖排 */
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+.tt th {
+  background: var(--bg);
+  color: var(--text-2);
+  font-weight: 600;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+}
+.tt td {
+  border: 1px solid var(--border);
+  padding: 2px;
+  vertical-align: top;
+}
+.tt td.jie {
+  width: 54px;
+  text-align: center;
+  color: var(--text-3);
+  background: #fafbfc;
+  font-weight: 600;
+  padding: 3px 2px;
+  /* ⚠️ 这里是**整表的行高下界**：本格要放下「节号 + 上下课时间」两行
+     （约 26px），所以任何一行的最小高度由它决定。
+     课程块再怎么"撑满"也不可能比这个下界更矮 —— 这是表格布局的固有属性，
+     不是 bug。别为了追求"严格按节次算高度"把它压掉，否则时间会折行。 */
+  min-height: 26px;
+}
+/* 节次格里叠上「第几节 + 上下课时间」。
+   节号是主角（跟课表内容对齐用），时间是小字辅助（用来排作息），
+   所以时间用更浅的色 + 更小的字，避免喧宾夺主。
+   时间单行显示（08:00-08:40），窄列里宁可小一点也不要折成两行 —— 折行会让
+   节次格高度撑开，跟右侧 rowspan 的课程块对不齐。 */
+.tt td.jie .jie-n { display: block; line-height: 1.15; }
+.tt td.jie .jie-t {
+  display: block;
+  margin-top: 0;
+  font-size: 9px;
+  font-weight: 500;
+  line-height: 1.1;
+  color: #a8b0ba;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.35px;
+  white-space: nowrap;
+}
+.tt td.empty-cell { background: #fcfcfd; height: 26px; }
+.tt td.tt-cell {
+  background: #fcfcfd;
+  /* ⭐ 必须是 table-cell —— 这是「色块填满自己节次」能成立的前提。
+     ⚠️ 曾用 display:flex（想让 .slot 用 flex:1 撑满），结果**整表 rowspan 失效**：
+        rowspan=2 与 rowspan=3 的格子实测都是 70px，完全无视跨度，
+        行高被乱摊（08:00 行 158px、12:00 行 382px），课表看着就是"糊的"。
+        实验对照（见 diag_flex.js）：display:table-cell 时 rowspan=2 → 116px、
+        rowspan=3 → 174px，**恰好 1.5 倍**，即每行 58px —— 这才是正确的表格布局。
+        ⚠️ 结论：**不要再用 flex 去"撑满" td**，撑满要靠 td 内部那层
+        `.slot-stack` 容器（它是 flex column，能均分、又不影响 td 的 table-cell 身份）。 */
+  display: table-cell;
+  height: 100%;              /* 让内层容器有可继承的高度基准 */
+  position: relative;
+}
+
+/* ⭐ 2026-10-01 定稿（用户明确要求）：
+ *   **课表保持普通矩形表格结构不动**，只做两件事：
+ *     ① 让**每个色块填满它自己对应的节次高度**；
+ *     ② 同一时间段的多门课**全部显示、纵向均分**（不再折叠成 +N）。
+ *
+ * ⚠️ 这一条**推翻了 2026-09-30 的「只显示 1 门 + 折叠 +N」定稿**。当时的理由是
+ *    「均分后每个色块被压扁」，但用户在 10-01 明确选了「纵向均分（上下等分）」
+ *    —— **以最新选择为准，不要再自作主张改回折叠。**
+ *
+ * 做法在 JS 侧（mergeDayBlocks / renderTimetable）已保证：格子按「节次区间」分组切好，
+ * 格子的 rowspan = 该区间自己的跨度。这里只要让内层容器撑满格子、并把格内 N 门课等分：
+ *
+ *   · 一格 = 一个节次区间（如 8-10 节）
+ *   · `<td>` 里只放**一层** `.slot-stack`（flex column），格内课全塞进去
+ *   · `.slot-stack` 高度 = 格子高度 → 整体**正好填满这个区间**
+ *   · 每个 `.slot` 是 `flex:1 1 0` → N 门课**上下等分**该高度
+ *
+ * ⚠️ 均分必须交给 `.slot-stack` 这层**子容器**，**绝不能把 `<td>` 本身改成 flex**
+ *    —— 那会让整表 rowspan 失效（实测 rowspan=2/3 都变成 70px，见 .tt td.tt-cell 注释）。 */
+.tt td.tt-cell > .slot-stack {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 0;                    /* 区之间不留缝（分隔靠区的虚线边框），改这里要同步 app.js 的 GAP */
+  /* ⭐ 「填满它对应的节次」靠这一句：高度由 JS 按「行数 × 行高」显式算出，
+     经 --slot-h 传进来（见 app.js renderTimetable）。
+     为什么不在 CSS 里用 height:100%：td 是 table-cell 时，其高度来自「行高之和」，
+     而 tbody 行没有"确定高度"供百分比解析 → height:100% 会退化成 auto，
+     实测色块只有 64px 而格子 116px，底下空一大截。
+     ⚠️ --slot-h 缺省时兜底 auto（万一 td 没带该变量也不会塌）。 */
+  height: var(--slot-h, auto);
+  overflow: hidden;          /* 内容过长时裁掉，别把整行顶开破坏网格 */
+}
+
+/* ⭐⭐ 「按节次分区」：一个区 = 格内一段节次（如 8-10 节）里的所有课。
+ *
+ * 为什么要有这一层（用户 2026-10-01 反馈）：
+ *   整格做 N 等分时，8-10 节的 5 门课会被平摊到 6 行里 → **排到了第 11 节的位置**。
+ *   分区之后，每个区只占它自己那一段节次，区高不足时会**把这个区和它跨的那些行一起撑高**
+ *   （见 app.js renderTimetable 的「按节次分区 + 装不下就拉长」）。
+ *
+ * 区高由 JS 写行内 px（装得下 = 完全填充对应节次；装不下 = 撑高）。 */
+.tt td.tt-cell > .slot-stack > .zone {
+  position: relative;
+  flex: 0 0 auto;            /* 高度由 JS 定，别让 flex 去伸/缩它 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;                  /* 区内相邻两块之间的缝，改这里要同步 app.js 的 GAP */
+  min-height: 0;
+}
+
+/* 虚线隔离：只有相邻两区**真的共用了某个节次**时才画（如 8-10 与 10-11 共用第 10 节，
+ * 边界落在第 10 节的正中间）。只是首尾相接的两区（10-11 与 12-13）不画 —— 用户明确要求。 */
+.tt td.tt-cell > .slot-stack > .zone.sep::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  border-top: 1px dashed var(--border-strong, #c8ced6);
+  pointer-events: none;
+}
+
+/* 格内每门课等分高度。
+ * ⚠️ 必须是 `flex: 1 1 0`（basis = **0**）。若写 `flex:1 1 auto`，内容多寡会参与分配，
+ *    高的色块更占地方 → 就不是"等分"了（用户要的是上下等分）。
+ * ⚠️ `min-height: 0` 也不能省：flex 子项默认 min-height:auto，内容撑不下时它会顶着
+ *    不肯收缩 → 直接把 --slot-h 顶破、溢出格子。
+ * ⚠️ 这里的 `min-height:0` 是**默认值**。当整格真的装不下时，JS 会给每一块
+ *    单独写上行内 `min-height`（= 它自己内容需要的高度），让它别被压扁
+ *    —— 见 app.js renderTimetable 的「装不下就把这一格拉长」。 */
+.tt td.tt-cell > .slot-stack .slot {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0;
+  max-height: none;
+  overflow: hidden;
+}
+
+/* ⭐⭐ 2026-10-01 第三版定稿（用户要求）：「让信息显示全，不要省略的，
+   位置不够可以适当拉长课表」。
+ *
+ * 🔴 这一条**推翻了上一版的 dense / micro / nano 压缩档位**
+ *    （`text-overflow: ellipsis` 与 `display:none` 全部取消）。
+ *    上一版虽然保证了「节次·周次 一定可见」，但代价是末尾的**地点被省略号吃掉** ——
+ *    用户要的是**一个字都不许丢**。
+ *
+ * 现在只有两条规则：
+ *   ① 副信息**自然回流**（不 nowrap、不 ellipsis）：两条 `.mt` 都是 inline，
+ *      内容短就并成一行，长就自己折行 —— 折行只会让格子变高，不会丢字。
+ *   ② 装不下就**把这一格拉长**：JS 按实测内容高度重算 `--slot-h`
+ *      （见 app.js renderTimetable）。课表外层 `.tt-wrap` 只有 `overflow-x`，
+ *      纵向本来就能自由长高。
+ *
+ * ⚠️ `dense` / `micro` / `nano` 三个类已删除，JS 侧也不再打这些类。
+ *    **不要再加回来**：任何「按宽度省略」的方案都会丢信息，而这一格的信息
+ *    （第几节、第几周、在哪儿上）恰恰是不能丢的。
+ *    选择器权重高于下方的 `.slot .nm` / `.slot .mt`，所以不用 !important。 */
+.tt td.tt-cell > .slot-stack .slot > .meta { display: block; }
+.tt td.tt-cell > .slot-stack .slot > .meta > .mt { display: inline; }
+.tt td.tt-cell > .slot-stack .slot > .meta > .mt.mt-ad::before { content: ' · '; }
+
+
+
+/* ⭐ 基础网格步长：给每个「普通节次行」一个稳定的行高锚点。
+ *
+ * 为什么必须有这个锚点（真踩过的坑）：
+ *   若不给 jie 行一个与列宽无关的高度，表格在"某列内容很高、另一列很矮"时，
+ *   浏览器会把行高按 max-content 分配 —— 实测 08:00 那行被撑到 158px、
+ *   12:00 那行撑到 382px，而 08:50 / 11:20 这些行被压到 31px 的地板。
+ *   结果是：**整张表高度全靠最长的那列决定，其它列跟着一起被拉高**，
+ *   色块高度也就不再跟"自己的节次跨度"挂钩了。
+ *
+ *  加了这个高度后，行高被**钉在 58px**，列内容再长也只是在该格内换行/撑开
+ *  这一行，不会把整表带偏 —— 于是 rowspan=N 的色块 ≈ N×58px，
+ *  真正实现「色块高度 = 它自己对应的节次跨度」。
+ *
+ * ⚠️ 58px 的构成：节号(13px)+时间(10px) 两行 ≈ 26px 是下界，
+ *    再留出课程名换行的余量。别随意调小，否则课程名会挤成一团。
+ *
+ * ⭐ 注意 `height` 在 table-cell 上是**下限**语义：58px 是「至少这么高」。
+ *    某一格内容太多时，JS 会把该格的 `--slot-h` 调大（见 renderTimetable 的
+ *    「装不下就把这一格拉长」），这一组行就跟着长高 —— **这张表是可以变高的**，
+ *    `.tt-wrap` 只限制横向滚动，纵向没有约束。 */
+.tt td.jie { height: 58px; }
+/* 上方带 rowspan 的课程块会把这几行的行高"分掉"，浏览器按比例摊。
+   给普通行一个 height 后，高块所在的多行也会等比放大，整体更稳定。 */
+.tt tr:not(.jie-gap) > td.empty-cell { height: 58px; }
+
+/* 作息里的「缺号节次」—— 处理成一道细窄的分隔线，而不是一整行空白。
+   空白行会让人误判「第 5 节紧接着第 6 节」，实际中间可能隔着很长的空档。
+   节号仍保留（浅色、小字），是为了让节号序列不断档：用户对不上号时能确认
+   「这两节确实没有课表条目」，而不是渲染漏了。
+
+   ⚠️ 2026-10-01 起 **我校作息已补齐 6、7 节（12:50-13:30 / 13:40-14:20）**，
+      1-15 连续无缺号 → 这套样式在当前数据下**不会被命中**，属于**防御性保留**
+      （换学校/换学期仍可能缺号）。别再因为"看不到效果"就把它们删掉。 */
+.tt tr.jie-gap td { height: 16px; padding: 0; vertical-align: middle; }
+.tt tr.jie-gap td.jie-gap-cell {
+  background: #f7f8fa;
+  color: #ccd2d9;
+  font-weight: 500;
+  font-size: 10px;
+}
+.tt tr.jie-gap td.jie-gap-bar {
+  height: 16px;
+  background: repeating-linear-gradient(
+    45deg, #ffffff, #ffffff 5px, #f5f7f9 5px, #f5f7f9 10px
+  );
+}
+
+/* 课表格子里的课程块。
+   注意：**不要**用 nowrap + ellipsis —— 窄列里会把课程名截成「马克思主…」，
+   实测用户看不清。允许换行、按词断行，宁可格子高一点也不要把字吃掉。 */
+.slot {
+  display: block;
+  border-radius: 4px;
+  border-left: 3px solid;
+  padding: 3px 5px;
+  margin: 1px 0;
+  line-height: 1.3;
+  max-height: 190px;      /* 叠太多门时格内自己滚，别把整行撑爆 */
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.slot .nm {
+  font-weight: 600;
+  display: block;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.slot .mt {
+  display: block;
+  font-size: 11px;
+  opacity: .8;
+  overflow-wrap: anywhere;
+}
+.slot.selected { background: var(--accent-weak); border-color: var(--accent); color: #1d4fa8; }
+
+/* 已抢（能退课 = 抢到手的课）：绿色强调，与「已选但不可退」明确区分。
+   用户 2026-09-30 指定：能否退课就是「是否已抢到」的判据。 */
+.slot.won { background: var(--green-weak); border-color: var(--green); color: #14532d; }
+
+/* 待选：一律琥珀底 —— 「这是清单里的课」这个信息不能因为冲突就被吃掉。 */
+.slot.pending  { background: var(--amber-weak);  border-color: var(--amber);  color: #8a5a00; }
+
+/* 清单内互斥（只和自己清单里的其他待选撞时间）：仍是待选的橙色，只加一圈虚线。
+   这是用户主动押的注，不是错误，不该看起来像报错。 */
+.slot.mutex {
+  background: var(--amber-weak); color: #8a5a00;
+  border-color: var(--amber);
+  border-left-style: dashed;
+  box-shadow: inset 0 0 0 1px rgba(192, 125, 0, .38);
+}
+
+/* 与已选（或清单内其他待选）节次占位重叠、但**周次错开**：浅琥珀 + 虚线边。
+   明明不撞，只是节次位置看着重叠，所以只做最轻的提示（用户 2026-09-30 要求恢复）。 */
+.slot.soft {
+  background: var(--amber-weak); color: #8a5a00;
+  border-color: var(--amber);
+  border-left-style: dashed;
+}
+
+/* 与**已选**星期/节次/周次全撞：红底 —— 这一档确实该醒目 */
+.slot.hard {
+  background: var(--red-weak); border-color: var(--red); color: #8f2318;
+  box-shadow: inset 0 0 0 1px #f3b8b2;
+}
+
+/* ---------- 已选课程明细 ---------- */
+
+.list.tall { max-height: 520px; }
+
+.sel-item { padding: 10px 16px; border-bottom: 1px solid var(--border); }
+.sel-item:last-child { border-bottom: none; }
+.sel-item .nm {
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.sel-item .grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 3px 16px;
+  margin-top: 5px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.kv { display: flex; gap: 5px; min-width: 0; }
+.kv .k { color: var(--text-3); flex: none; }
+.kv .v { word-break: break-word; }
+
+/* ---------- 已选卡片上的退课入口 ----------
+   复刻教务已选列表的两态：教务给「退课」按钮才给按钮，教务显示「已选」就只显示蓝字。
+   蓝字颜色 #428bca 照抄教务（zzxkYzbChoosedZy.js:202 的 #428BCA）。 */
+.sel-item .nm .dropzone {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 400;
+}
+.sel-item .nm .dropzone .yixuan {
+  color: #428bca;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: help;
+}
+.sel-item .nm .dropzone .confirmq { font-size: 12px; font-weight: 500; color: var(--text-2); }
+.sel-item .nm .dropzone .confirmq .muted { font-weight: 400; }
+
+/* 清单序号 —— 数字就是抢课优先顺序（可 ↑↓ 调整） */
+.list .item .ord-wrap {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.list .item .ord {
+  flex: none;
+  width: 20px; height: 20px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* 蹲课「已蹲到」标签：蹲到了退课名额后，亮在序号下面（2026-10-01） */
+.list .item .won-tag {
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 3px;
+  background: var(--green-weak);
+  color: var(--green);
+  border: 1px solid #bfe5cb;
+  white-space: nowrap;
+}
+
+/* 冲突相关的按钮与提示 */
+button.conflict {
+  background: var(--red-weak);
+  border-color: #f5c6c2;
+  color: var(--red);
+}
+button.conflict:hover:not(:disabled) { background: #fbdcd9; }
+button.softwarn {
+  background: var(--amber-weak);
+  border-color: #f0dcae;
+  color: var(--amber);
+}
+button.mutexwarn {
+  background: var(--amber-weak);
+  border-color: #e0be78;
+  border-style: dashed;
+  color: var(--amber);
+}
+/* 已在清单里 = 绿色「完成态」。
+   ⚠️ 别写成 button.added:disabled —— 这个按钮现在是**可点的**（再点即移除），
+   加 :disabled 限定会让它整条样式失效、退回成灰按钮。 */
+button.added,
+button.added:disabled {
+  opacity: 1;
+  background: var(--green-weak);
+  border-color: #bfe5cb;
+  color: var(--green);
+  font-weight: 600;
+}
+button.added:not(:disabled) { cursor: pointer; }
+button.added:not(:disabled):hover { background: #d3efdd; border-color: #9fd4b5; }
+.cls-row { border-top: 1px dashed var(--border); padding-top: 7px; margin-top: 7px; }
+.cls-row:first-child { border-top: none; margin-top: 0; padding-top: 0; }
+.cls-warn {
+  font-size: 11px;
+  color: #8f2318;
+  background: var(--red-weak);
+  border-left: 3px solid var(--red);
+  border-radius: 3px;
+  padding: 3px 7px;
+  margin-top: 4px;
+  line-height: 1.55;
+}
+.cls-warn.soft {
+  color: #8a5a00;
+  background: var(--amber-weak);
+  border-left-color: var(--amber);
+}
+
+/* ==========================================================================
+   学分条 —— 教务选课首页的「本学期选课要求」+ 清单待加选学分
+   为什么值得占一行：教务驳回的头号原因就是「超过本学期最高选课学分限制」，
+   提前把「已选 / 上限 / 待加选 / 余量」摆出来，用户不必靠撞墙才发现。
+   ========================================================================== */
+.creditbar {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 4px;
+  padding: 2px 8px 2px 10px;
+  font-size: 12px;
+  color: var(--text-2);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.creditbar[hidden] { display: none; }
+.creditbar .kv { display: inline-flex; align-items: baseline; gap: 3px; }
+.creditbar b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.creditbar .sep { color: var(--text-3); }
+/* 待加选学分是本地清单算的，用强调色区分「教务给的」与「我们自己算的」 */
+.creditbar .want b { color: var(--accent); }
+/* 照这份清单抢会超额 —— 这才是要拦住的场面 */
+.creditbar .over { color: var(--red); font-weight: 600; }
+.creditbar .over b { color: var(--red); }
+.creditbar .unknown { color: var(--text-3); }
+
+/* 已选/上限的迷你进度条：比干看两个数字直观 */
+.creditbar .gauge {
+  position: relative;
+  width: 54px;
+  height: 6px;
+  border-radius: 999px;
+  background: #dfe3e8;
+  overflow: hidden;
+}
+.creditbar .gauge i {
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  background: var(--green);
+  border-radius: 999px;
+}
+.creditbar .gauge.full i { background: var(--amber); }
+.creditbar .gauge.over i { background: var(--red); }
+
+.creditbar .refresh {
+  padding: 0 5px;
+  height: 18px;
+  line-height: 16px;
+  font-size: 12px;
+  color: var(--text-3);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.creditbar .refresh:hover { color: var(--accent); border-color: var(--border); background: #fff; }
+.creditbar .refresh[disabled] { opacity: .45; cursor: default; }
+
+@media (max-width: 720px) {
+  .creditbar { border-radius: var(--radius-sm); padding: 4px 8px; }
+}
+
+/* ---------- 开抢时刻：日期分段 + 时/分/秒拨轮 ---------- */
+
+/* 三段式单选（立即开始 / 今天 / 明天）。用 inline-flex 而不是 <select>：
+   只有三个互斥选项，摊平了一眼看全，少点一次鼠标。 */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--panel);
+}
+.seg button {
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 6px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.seg button:first-child { border-left: 0; }
+.seg button:hover { background: var(--bg); color: var(--text); }
+.seg button.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ⭐ 拨轮。三个竖直滚动列，靠 CSS scroll-snap 吸附到正中那一格。
+   ⚠️ 单格高度 28px 在这里、在 JS（WHEEL_H）里各写了一次 —— 改一处必须改另一处。
+   列高 84px = 3 格 = 上下各露出一格，"滚到中间的那个数字就是选中的"。
+
+   三种输入方式（都在 app.js::buildWheelCol 里）：
+     · 鼠标滚轮 —— **一个档位走一格**（JS 接管了，不再靠原生滚动，否则一滑跳好几格）
+     · ↑ / ↓ 方向键
+     · **鼠标左键点某一格** → 精确选它 */
+.wheel {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+/* 中间那道的「选中框」，画在数字后面（数字列有 z-index，会盖在它上面） */
+.wheel::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: var(--wheel-h);
+  transform: translateY(-50%);
+  background: var(--accent-weak);
+  border-radius: 4px;
+  pointer-events: none;   /* ⚠️ 必须：否则滚轮事件全被这层挡住，拨不动 */
+}
+.wheel .wcol {
+  position: relative;
+  z-index: 1;
+  height: 84px;
+  width: 26px;
+  overflow-y: auto;
+  overscroll-behavior: contain;   /* 拨到底了别把整页带着滚 */
+  scroll-snap-type: y mandatory;
+  scrollbar-width: none;          /* Firefox */
+  -ms-overflow-style: none;
+  outline: none;
+}
+.wheel .wcol::-webkit-scrollbar { display: none; }
+.wheel .wcol:focus-visible { box-shadow: 0 0 0 2px var(--accent-weak); border-radius: 4px; }
+.wheel .wi {
+  height: var(--wheel-h);
+  line-height: var(--wheel-h);
+  text-align: center;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;   /* 等宽数字，滚动时不会左右抖 */
+  color: var(--text-3);
+  scroll-snap-align: center;
+  user-select: none;
+}
+.wheel .wi.on { color: var(--accent); font-weight: 700; }
+/* ⭐ 数字可以**左键点选**。`.off`（「立即开始」）时不给这个提示 ——
+   那种状态下点击是被忽略的，提示可点就是在骗人。 */
+.wheel:not(.off) .wi { cursor: pointer; }
+.wheel:not(.off) .wi:hover {
+  color: var(--text);
+  background: var(--accent-tint);
+  border-radius: 4px;
+}
+.wheel .wsep { position: relative; z-index: 1; color: var(--text-3); font-weight: 700; }
+
+/* 「立即开始」时拨轮不参与 —— 变灰 + 禁止滚动（但仍是可见的，好让用户看到
+   自己上次拨的是几点，改天再定时不用重新拨）。 */
+.wheel.off { opacity: .5; }
+.wheel.off .wcol { overflow: hidden; }
+
+@media (max-width: 720px) {
+  .wheel .wcol { width: 22px; }
+  .seg button { padding: 6px 8px; }
+}

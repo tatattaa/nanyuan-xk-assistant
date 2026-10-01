@@ -1,0 +1,30 @@
+# === 敏感数据（含 Cookie / 学号 / 抓包原始流量）—— 绝不提交 ===
+captures/
+state/
+logs/
+
+# === 本地项目记忆（WorkBuddy 内部数据）===
+.workbuddy/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# === 打包产物 ===
+build/
+dist/
+*.spec.bak
+
+# === 系统/编辑器 ===
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# === 运行期临时文件 ===
+*.log
+运行日志.log

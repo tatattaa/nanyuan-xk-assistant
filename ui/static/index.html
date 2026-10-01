@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>南苑抢课助手</title>
+<link rel="icon" type="image/svg+xml" href="/static/icon.svg">
+<link rel="alternate icon" type="image/png" href="/static/icon-32.png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- ⭐ 访问口令门（2026-10-01）：开启口令保护时，这是第一道门。
+     输对口令才能看到登录门。由 ensureAccess()/showAccessGate() 控制显隐。 -->
+<div id="accessGate" class="access-gate" style="display:none">
+  <div class="login-card">
+    <div class="login-brand">
+      <img class="login-logo" src="/static/icon.svg" alt="logo">
+      <div>
+        <h2>访问口令</h2>
+        <p class="login-sub">此页面已开启访问保护，请输入口令进入</p>
+      </div>
+    </div>
+    <div class="login-form">
+      <label class="login-field">
+        <span>访问口令</span>
+        <input type="password" id="accessKeyInput" placeholder="请输入 6 位访问口令" inputmode="numeric" autocomplete="off">
+      </label>
+      <button id="btnAccessKey" class="primary login-btn">进入</button>
+    </div>
+    <div id="accessMsg" class="login-msg"></div>
+  </div>
+</div>
+
+<header class="topbar" id="topbar" style="display:none">
+  <h1>南苑抢课助手</h1>
+  <span class="sub" id="schoolName">正方教务</span>
+  <span class="spacer"></span>
+  <span class="pill semester" id="pillSemester" title="当前选课轮次与选课时间（来自教务选课首页）">学期信息</span>
+  <span class="pill" id="pillSession"><span class="dot"></span>未登录</span>
+  <span class="pill" id="pillOpen"><span class="dot"></span>状态未知</span>
+  <span class="pill" id="pillClock" title="本地时钟与教务服务器的偏差。定时开抢全靠它。"><span class="dot"></span>时钟未校准</span>
+  <span class="pill" id="pillTask"><span class="dot"></span>空闲</span>
+  <button class="tiny danger" id="btnDrop" title="清除本机会话，回到登录页" style="display:none">退出登录</button>
+</header>
+
+<!-- ⭐ 登录门（2026-10-01）：未登录时只显示这一张登录卡，登录成功后才进入南苑抢课助手主体。
+     由 renderGate() 控制 #loginGate 与 #mainApp 的显隐。 -->
+<div id="loginGate" class="gate">
+  <div class="login-card">
+    <div class="login-brand">
+      <img class="login-logo" src="/static/icon.svg" alt="南苑抢课助手">
+      <div>
+        <h2>南苑抢课助手</h2>
+        <p class="login-sub" id="loginSchoolSub">正方教务</p>
+      </div>
+    </div>
+
+    <div class="login-form">
+      <label class="login-field">
+        <span>学号</span>
+        <input type="text" id="userInput" placeholder="请输入学号" autocomplete="username">
+      </label>
+      <label class="login-field">
+        <span>密码</span>
+        <input type="password" id="passInput" placeholder="请输入密码" autocomplete="current-password">
+      </label>
+      <button id="btnPassword" class="primary login-btn">登 录</button>
+    </div>
+
+    <div class="login-note">
+      密码只在本机内存走一遍，不落盘、不上传，关闭服务即消失。
+    </div>
+
+    <div id="sessionMsg" class="login-msg"></div>
+  </div>
+</div>
+
+<!-- 南苑抢课助手主体：登录成功后才显示 -->
+<div id="mainApp" class="wrap" style="display:none">
+
+  <!-- 学生学业情况统计：从教务「学生学业情况统计查询」拉取，展示基础信息 + 各课程性质学分对照 -->
+  <section class="card" id="academicCard" style="display:none">
+    <header>
+      <span>学业情况</span>
+      <span class="spacer"></span>
+      <button class="tiny" id="btnAcademic" title="重新向教务拉取一次学业情况统计">刷新</button>
+    </header>
+    <div class="body tight">
+      <div id="academic" class="academic-wrap"><div class="empty">尚未加载学业情况统计</div></div>
+    </div>
+  </section>
+
+  <!-- 课表：已抢（抢到手的） / 已选（教务给的，不可退） / 待选（清单里还没抢的），一眼看出会不会撞 -->
+  <section class="card">
+    <header>
+      <span>课表</span>
+      <span class="legend">
+        <i class="lg won"></i>已抢
+        <i class="lg sel"></i>已选
+        <i class="lg pend"></i>待选（清单）
+        <i class="lg mutex"></i>清单内互斥
+        <i class="lg hard"></i>与已选时间冲突
+        <i class="lg soft"></i>与已选节次重叠
+      </span>
+      <span class="spacer"></span>
+      <label class="muted" for="weekFilter">周次</label>
+      <select id="weekFilter" style="width:auto;min-width:96px" title="只看某一周的课；「全部」则把所有周次的课都画上">
+        <option value="0">全部</option>
+      </select>
+      <span class="muted" id="ttHint"></span>
+    </header>
+    <div class="body tight">
+      <div id="timetable" class="tt-wrap"><div class="empty">建立会话后自动读取已选课程</div></div>
+    </div>
+    <div class="body">
+      <div class="note" id="ttNote">
+        待选课<strong>允许时间冲突</strong>（抢课期间已抢/已选都会变，硬拦反而会误伤）：
+        冲突只做标注与提示。清单顺序就是抢课顺序，<strong>真的撞时间</strong>的
+        （同一天、节次有交集、<strong>周次也有交集</strong>）只能上成其中一门 ——
+        谁先抢到，与之相撞的自动不再提交，省服务端配额；
+        只是节次占位重叠、周次错开的不会互相影响。
+      </div>
+    </div>
+  </section>
+
+  <div class="cols">
+
+    <!-- 第 2 步：筛选课程（左列）
+         ⭐ 2026-10-01 用户要求：把教务选课页的「筛选」工具搬下来做成筛选器，
+            另加一个「只看与已选时间冲突」。
+             这些条件**全部由教务服务端执行**（课程列表接口不返回上课时间等字段），
+             值由 JS 拼成查询参数（见 buildFilterQuery）。 -->
+    <section class="card col-left">
+      <header>
+        <span class="step">2</span>
+        <span>筛选课程</span>
+        <span class="spacer"></span>
+        <button class="tiny" id="btnFilterReset" title="清空所有筛选条件，恢复列出全部课程">重置</button>
+      </header>
+      <div class="body">
+        <div class="filter-grid">
+          <span class="flabel">上课星期</span>
+          <div class="chips" id="fSksj" data-filter="sksj"></div>
+
+          <span class="flabel">上课节次</span>
+          <div class="chips" id="fSkjc" data-filter="skjc"></div>
+
+          <span class="flabel">学分</span>
+          <input type="text" class="fsel" id="fXf" data-filter="xf"
+                 placeholder="如 2（留空=不限）">
+
+          <span class="flabel">是否重修</span>
+          <select class="fsel" id="fCx" data-filter="cx">
+            <option value="">不限</option>
+            <option value="0">非重修</option>
+            <option value="1">重修</option>
+          </select>
+
+          <span class="flabel">有无余量</span>
+          <select class="fsel" id="fYl" data-filter="yl">
+            <option value="">不限</option>
+            <option value="1">有余量</option>
+            <option value="0">无余量</option>
+          </select>
+
+          <span class="flabel">只看时间冲突</span>
+          <select class="fsel" id="fSksjct" data-filter="sksjct"
+                  title="只看与「已选课程」上课时间冲突的课（我方新增，教务原生没开这个开关）">
+            <option value="">不限</option>
+            <option value="1">只看冲突</option>
+            <option value="0">只看不冲突</option>
+          </select>
+        </div>
+        <div class="note info" id="filterHint" style="margin-top:10px;display:none"></div>
+      </div>
+    </section>
+
+    <!-- 第 3 步：搜索课程（右列，占 7 份）
+         ⭐ 2026-10-01 用户调整：把「搜索课程」和「搜索结果」合并成**一张卡**，
+            搜索框放在结果列表上面，这张合并卡作为整体放到「筛选课程」右侧。
+             即：左列 = 筛选课程 + 抢课清单；右列 = 搜索框 + 结果列表。 -->
+    <section class="card col-right">
+      <header>
+        <span class="step">3</span>
+        <span>搜索课程</span>
+        <span id="courseResultTitle"></span>
+        <span class="spacer"></span>
+        <span class="muted" id="courseCount"></span>
+        <!-- 「上次搜到的课程」：落盘的搜索结果（按课程类别分桶）。
+             未开放期教务查不了课，点它就能把上次这个类别搜到的课程拿出来看。
+             ⭐ 由 renderCoursesSnapBtn() 控制显隐：**只在教务未开放期显示**
+                （开放期「搜索」就是实时的，这个离线入口只会碍眼）。 -->
+        <button class="tiny" id="btnCoursesSnap" style="display:none"
+                title="加载上次搜索保存的课程数据（离线，用于未开放期查看）">📂 上次数据</button>
+      </header>
+      <div class="body">
+        <div class="row">
+          <select id="tabSel" style="min-width:190px" title="课程类别（每个类别的选课上下文不同，必须选对）">
+            <option value="">— 请先建立会话 —</option>
+          </select>
+          <input type="text" id="kw" class="grow" placeholder="课程名 / 课程号 / 教师，留空列出该类全部">
+          <button class="primary" id="btnSearch">搜索</button>
+        </div>
+        <div class="note" id="tabHint" style="margin-top:10px;display:none"></div>
+      </div>
+      <div class="body tight">
+        <div class="note info" id="courseHint" style="margin-bottom:8px;display:none"></div>
+        <div class="list" id="courseList">
+          <div class="empty">输入关键词后点击「搜索」</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 第 4 步：抢课清单 + 蹲课（横跨全局一行，五五并排）
+         ⭐ 2026-10-01 用户要求：抢课清单右侧做「蹲课」功能，两者**以全局宽度**五五开。
+             用一个 .subcols 容器横跨整行（grid-column: 1 / -1），
+             内部两张卡横排、各占全局的一半。 -->
+    <div class="subcols">
+
+    <!-- 抢课清单（左半）
+         ⚠️ 顺序有意义：先在上一步搜到课、加进清单，再在这里定怎么抢。 -->
+    <section class="card">
+      <header>
+        <span class="step">4</span>
+        <span>抢课清单</span>
+        <!-- 学分条：来自教务选课首页的「本学期选课要求」+ 本地清单汇总。
+             待加选学分 = 清单里所有课的学分之和（点 ↻ 可向教务取最新的已选学分） -->
+        <span class="creditbar" id="creditBar"></span>
+        <span class="spacer"></span>
+        <span class="muted" id="planCount">0 项</span>
+        <button class="tiny" id="btnClearPlan">清空</button>
+      </header>
+      <div class="body tight">
+        <!-- 「上次保存的数据」条：启动**不再自动恢复**清单，用户想用上次那份得自己点。
+             典型时机 = 查课期与抢课期之间那段「未开放期」：教务什么都查不到，
+             把上次存的数据拿出来正好看课。由 renderSnapshotBar() 控制显示。 -->
+        <div class="note" id="snapshotBar" style="display:none;margin:0 0 8px"></div>
+        <div class="list" id="planList">
+          <div class="empty">从左侧课程列表点击「+ 加入清单」</div>
+        </div>
+      </div>
+      <div class="body">
+        <div class="row">
+          <label class="muted"><input type="checkbox" id="optStopFirst"> 抢到一门即停</label>
+          <!-- 派发方式：决定「下一个请求发给哪一项」。
+               串行 = 一项打到终态才轮到下一项（火力集中）；
+               轮流发送 = 每回合给每项发一发、不等上一发回来（治教务卡顿时的队头阻塞）。
+               ⚠️ 两种都是**单线程**（任何时刻最多一个在途请求），不是并发开关。 -->
+          <label class="muted" for="optRetryMode" style="margin-left:14px;white-space:nowrap">派发方式</label>
+          <select id="optRetryMode" title="教务卡顿时选「轮流发送」：每门课都能先提交一遍，不会被某一发卡住">
+            <option value="round_robin" selected>轮流发送（适用于抢课程数量多或者教务系统卡顿的时候）</option>
+            <option value="serial">串行（一项抢完再抢下一项，适用于抢非常想上的课）</option>
+          </select>
+        </div>
+        <div class="note" id="modeHint" style="margin-top:8px"></div>
+
+        <div class="row" style="margin-top:10px;flex-wrap:wrap;row-gap:8px">
+          <label class="muted" style="white-space:nowrap">开抢时刻</label>
+
+          <!-- 目标日。三选一：
+                 · 立即开始 = **不定时**（就是原来「留空」那个语义，默认值）；
+                 · 今天 / 明天 = 定时，时刻由右边的拨轮决定。
+               ⚠️ 刻意**不用**「留空」来表达立即开始 —— 拨轮上永远有数字，
+                  靠"空值"表达会没法区分「拨到 00:00:00」和「不定时」。 -->
+          <div class="seg" id="segDay" role="group" aria-label="开抢日期">
+            <button type="button" data-day="now">立即开始</button>
+            <button type="button" data-day="0">今天</button>
+            <button type="button" data-day="1">明天</button>
+          </div>
+
+          <!-- 时/分/秒拨轮：滚动吸附，鼠标滚轮 / 拖动 / 上下方向键都能拨。
+               分钟和秒都是 0-59 全量 —— 精确到秒，不做步进限制。 -->
+          <div class="wheel" id="wheel" title="滚动拨动；也可以点一下再按 ↑ ↓ 键">
+            <div class="wcol" id="wH" tabindex="0" aria-label="时"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="wM" tabindex="0" aria-label="分"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="wS" tabindex="0" aria-label="秒"></div>
+          </div>
+
+          <button class="tiny" id="btnClock" title="打登录页采样，零副作用、零配额消耗">校准时钟</button>
+        </div>
+
+        <!-- ⚠️ 这个隐藏字段是**真正提交给后端的值**（`planBody` 读它）。
+             它由 JS 跟着拨轮实时同步，用户看不到也不用改；
+             留成 input 是为了「界面上显示的时刻」和「提交的时刻」永远是同一个字符串，
+             不会出现一份界面显示、另一份偷偷发出去的情况。 -->
+        <input type="hidden" id="startAt">
+
+        <!-- 拨轮的即时回显（还没开抢时的预览 / 过去时刻的告警）。
+             ⚠️ 和下面那个 #schedHint 是**两个**元素，别合并：
+                `tickCountdown()` 每 200ms 刷一次 #schedHint，清单为空时还会把它
+                display:none —— 拿它显示预览的话会被 200ms 一次地抹掉。 -->
+        <div class="note" id="startEcho" style="margin-top:8px;display:none"></div>
+        <div class="note" id="schedHint" style="margin-top:8px;display:none"></div>
+
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnStart">开始抢课</button>
+          <button class="danger" id="btnStop" disabled>停止</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 蹲课（右半，与抢课清单五五并排）
+         ⭐ 2026-10-01 实现完整功能：蹲课 = 蹲「已满」课的退课名额。
+            · 采用抢课清单的「轮流发送」派发方式（round_robin）；
+            · 每条申请请求间隔 1s / 0.8s 两档，用户自选；
+            · 按时间不按次数：用户选开始 / 结束时刻（沿用拨轮）。 -->
+    <section class="card">
+      <header>
+        <span class="step">5</span>
+        <span>蹲课</span>
+        <span class="spacer"></span>
+        <span class="muted" id="waitCount">0 项</span>
+        <button class="tiny" id="btnClearWait">清空</button>
+      </header>
+      <div class="body tight">
+        <div class="list" id="waitList">
+          <div class="empty">在搜索结果的课程里点「+ 蹲」加入要蹲名额的课</div>
+        </div>
+      </div>
+      <div class="body">
+        <div class="row" style="margin-top:4px;flex-wrap:wrap;row-gap:8px">
+          <label class="muted" style="white-space:nowrap">请求间隔</label>
+          <!-- 两条申请请求的最小间隔。两档：1s（稳）/ 0.8s（激进）。 -->
+          <div class="seg" id="waitIntervalSeg" role="group" aria-label="蹲课请求间隔">
+            <button type="button" data-ms="1000">1s</button>
+            <button type="button" data-ms="800">0.8s</button>
+          </div>
+        </div>
+
+        <!-- 开始时刻：今天/明天 + 时:分:秒 -->
+        <div class="row" style="margin-top:10px;flex-wrap:wrap;row-gap:8px">
+          <label class="muted" style="white-space:nowrap">开始</label>
+          <div class="seg" id="waitStartSeg" role="group" aria-label="蹲课开始日期">
+            <button type="button" data-day="now">立即</button>
+            <button type="button" data-day="0">今天</button>
+            <button type="button" data-day="1">明天</button>
+          </div>
+          <div class="wheel" id="waitStartWheel" title="蹲课开始时刻">
+            <div class="wcol" id="waitSH" tabindex="0" aria-label="开始时"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="waitSM" tabindex="0" aria-label="开始分"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="waitSS" tabindex="0" aria-label="开始秒"></div>
+          </div>
+        </div>
+
+        <!-- 结束时刻：今天/明天 + 时:分:秒（蹲课按时间，结束必填） -->
+        <div class="row" style="margin-top:8px;flex-wrap:wrap;row-gap:8px">
+          <label class="muted" style="white-space:nowrap">结束</label>
+          <div class="seg" id="waitEndSeg" role="group" aria-label="蹲课结束日期">
+            <button type="button" data-day="0">今天</button>
+            <button type="button" data-day="1">明天</button>
+          </div>
+          <div class="wheel" id="waitEndWheel" title="蹲课结束时刻">
+            <div class="wcol" id="waitEH" tabindex="0" aria-label="结束时"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="waitEM" tabindex="0" aria-label="结束分"></div>
+            <span class="wsep">:</span>
+            <div class="wcol" id="waitES" tabindex="0" aria-label="结束秒"></div>
+          </div>
+        </div>
+
+        <div class="note" id="waitEcho" style="margin-top:8px;display:none"></div>
+
+        <div class="row" style="margin-top:10px">
+          <button class="primary" id="btnStartWait">开始蹲课</button>
+          <button class="danger" id="btnStopWait" disabled>停止</button>
+        </div>
+      </div>
+    </section>
+
+    </div>
+
+  </div>
+
+  <!-- 已抢 / 已选课程明细：教师/职称、上课时间、教学地点、自选否 -->
+  <section class="card">
+    <header>
+      <span>已抢 / 已选课程</span>      <span class="spacer"></span>
+      <span class="muted" id="selCount">未加载</span>
+      <button class="tiny" id="btnReloadSel" title="重新向教务拉取一次已选课程（不会在轮询里自动调用）">刷新</button>
+    </header>
+    <div class="body tight">
+      <div class="list tall" id="selList">
+        <div class="empty">建立会话后会读取一次；之后只在你点「刷新」时才重新拉取</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="note" id="selHint">
+        已选信息只在<strong>建立会话时</strong>与<strong>点「刷新」时</strong>各拉一次，
+        不会进轮询 —— 抢课期间不占带宽、不拖慢提交。<br>
+        <strong>退课按钮完全跟着教务走</strong>：教务已选列表给这门课显示「退课」，这里才有「退课」按钮；
+        教务显示蓝色的「已选」，这里就只有蓝字、<strong>不提供退课</strong>。
+        真要退课时，后端还会拿教务刚给的数据再核一次资格，通不过就一个请求都不发。
+      </div>
+    </div>
+  </section>
+
+  <!-- 进度 -->
+  <section class="card">
+    <header>
+      <span>实时进度</span>
+      <span class="spacer"></span>
+      <span class="muted" id="progressText">等待开始</span>
+    </header>
+    <div class="body tight">
+      <div class="list" id="taskList">
+        <div class="empty">尚未启动抢课任务</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
