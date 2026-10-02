@@ -203,12 +203,88 @@ def _make_tray_icon(port: int, stop_cb) -> object:
         _icon.stop()
         stop_cb()
 
+    def _terminal(_icon, _item):
+        _open_log_console()
+
     menu = pystray.Menu(
         pystray.MenuItem("打开助手", _open, default=True),
+        pystray.MenuItem("显示终端", _terminal),
+        pystray.Menu.SEPARATOR,
         pystray.MenuItem("停止服务", _stop),
     )
     icon = pystray.Icon("nan_yuan_xk", img, "南苑抢课助手", menu)
     return icon
+
+
+# ⭐ 「显示终端」：托盘菜单开一个**实时跟随日志**的控制台窗口（2026-10-02 用户要求）。
+#   双击 exe 是窗口模式（console=False），**看不到任何输出** —— 出问题时无从排查。
+#   这里用 Windows 自带的 PowerShell 新开一个控制台：先打两行说明，再
+#   `Get-Content -Wait` 实时跟随日志文件（tail -f 效果），并保持交互（-NoExit）。
+#
+#   ⚠️ 必须 `CREATE_NEW_CONSOLE`：exe 是 **GUI 子系统**进程，自身没有控制台可供继承，
+#      不显式新开控制台的话，子进程会被静默创建却永远不出现窗口。
+#   ⚠️ 必须 `chcp 65001` + `[Console]::OutputEncoding = UTF8`：日志里有 emoji
+#      （🟢/🟡/⛔），控制台默认代码页 GBK 打不出来会变成 `?`。
+#   ⚠️ 日志文件**只有窗口模式才写**（`sys.stdout is None` 时把 stdout 重定向到文件），
+#      而托盘也只存在于窗口模式 → 有托盘就一定有日志文件，不必担心空窗。
+_CONSOLE_PROC: object = None
+
+
+def _open_log_console() -> None:
+    """打开一个实时跟随运行日志的终端窗口（已开着就不重复开）。"""
+    global _CONSOLE_PROC
+
+    if sys.platform != "win32":
+        print("  ⚠️ 「显示终端」目前只支持 Windows；日志文件路径见启动横幅「日志文件」一行")
+        return
+    if _CONSOLE_PROC is not None and _CONSOLE_PROC.poll() is None:
+        print("  日志终端已在运行（未重复打开）")
+        return
+
+    path = _runtime_log_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(exist_ok=True)
+    except OSError:
+        pass
+    lit = str(path).replace("'", "''")   # PowerShell 单引号串内的转义写法：' → ''
+
+    ps = ";".join([
+        "$Host.UI.RawUI.WindowTitle = '南苑抢课助手 · 运行日志'",
+        "chcp 65001 | Out-Null",
+        "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
+        "Write-Host '── 南苑抢课助手 · 运行日志（实时跟随）──' -ForegroundColor Cyan",
+        f"Write-Host '日志文件：{lit}' -ForegroundColor DarkGray",
+        "Write-Host 'Ctrl+C 可停止跟随，回到提示符后本窗口可当普通终端用。' -ForegroundColor DarkGray",
+        "Write-Host ''",
+        f"Get-Content -LiteralPath '{lit}' -Wait -Tail 300 -Encoding UTF8",
+    ])
+
+    import subprocess
+
+    try:
+        _CONSOLE_PROC = subprocess.Popen(
+            ["powershell", "-NoLogo", "-NoExit", "-Command", ps],
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+            close_fds=True,
+        )
+        print("  已打开日志终端窗口")
+    except Exception as e:
+        _CONSOLE_PROC = None
+        print(f"  ⚠️ 打开日志终端失败：{e}")
+
+
+def _close_log_console() -> None:
+    """停止服务时把日志终端一并关掉（否则会留下一个孤儿窗口）。"""
+    global _CONSOLE_PROC
+    proc, _CONSOLE_PROC = _CONSOLE_PROC, None
+    if proc is None:
+        return
+    try:
+        if proc.poll() is None:
+            proc.terminate()
+    except Exception:
+        pass
 
 
 def _browser_watchdog(
@@ -486,6 +562,9 @@ def main() -> int:
     _svr_thread.start()
 
     def _stop_all() -> None:
+        # ⭐ 日志终端是本进程开的子进程，**不会随 os._exit 一起消失** → 显式关掉，
+        #   否则「停止服务」之后会留下一个孤零零的日志窗口。
+        _close_log_console()
         # ⭐ 先通知页面「后端要停了」：前端据此显示「服务已停止」并尝试关闭标签页。
         #   （浏览器不允许服务器强制关闭标签页，所以只能「通知 + 尽力」。）
         try:
