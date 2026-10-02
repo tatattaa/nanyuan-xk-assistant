@@ -499,6 +499,15 @@ class Runtime:
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
+        # ⭐ 在线检测（presence，2026-10-02）：浏览器页面持有一条 SSE 长连接，
+        #   页面/浏览器关闭 → 连接真实断开 → 后端据此自动退出（仅窗口模式，见 serve.py）。
+        #   `_presence_lost_at = None` 表示「从来没连过」——此时绝不自动退出，
+        #   避免「前端没来得及建连就被判为无人」而把后端自己关掉。
+        self._presence = 0
+        self._presence_lost_at: float | None = None
+        # ⭐ 「后端即将退出」标志（2026-10-02）：决定 `/api/presence` 要不要把
+        #   shutdown 事件推给页面（前端据此提示「服务已停止」并尝试关闭标签页）。
+        self._shutdown_requested = False
         # 写操作串行锁（铁律 #6：写入串行）。抢课由 runner 内部自己串行，
         # 退课这类「一次性的写」走这把锁，保证同一个客户端同时只有一个写在飞。
         self.write_lock = threading.Lock()
@@ -591,6 +600,50 @@ class Runtime:
         if sess.invalid:
             return "expired"
         return "ok" if sess.verified_at else "unverified"
+
+    # -- 在线检测（浏览器页面是否还开着）------------------------------------
+    #
+    # 机制：前端页面对 `/api/presence` 持有一条 SSE 长连接。页面关闭（含整个浏览器
+    # 退出）时这条连接会**真实断开** —— 不像定时轮询会被浏览器「后台标签节流」降频，
+    # 所以它是判断「人还在不在」最可靠的信号。刷新页面会短暂断开并自动重连，
+    # 因此调用方（serve.py 守护线程）必须留够「宽限期」再动手。
+
+    def presence_enter(self) -> None:
+        """一个页面接入了在线通道。"""
+        with self._lock:
+            self._presence += 1
+            self._presence_lost_at = None
+
+    def presence_leave(self) -> None:
+        """一个页面断开了在线通道（关页/关浏览器/刷新）。"""
+        with self._lock:
+            self._presence = max(0, self._presence - 1)
+            if self._presence == 0:
+                self._presence_lost_at = time.time()
+
+    @property
+    def presence_idle(self) -> float:
+        """「无人在线」已持续的秒数；有人在线、或从未连过 ⇒ 0（表示绝不该退出）。"""
+        with self._lock:
+            if self._presence > 0 or self._presence_lost_at is None:
+                return 0.0
+            return max(0.0, time.time() - self._presence_lost_at)
+
+    def request_shutdown(self) -> None:
+        """标记「后端即将退出」。在线通道会把 shutdown 事件推给页面，
+        让页面显示「服务已停止」而不是继续留着一个失效的假界面。"""
+        with self._lock:
+            self._shutdown_requested = True
+
+    @property
+    def shutdown_requested(self) -> bool:
+        with self._lock:
+            return self._shutdown_requested
+
+    @property
+    def has_active_task(self) -> bool:
+        """是否有抢课 / 蹲课在跑（决定「关浏览器后」要不要先弹提醒）。"""
+        return self.running or self.wait_running
 
     def note_session_verified(self, *, is_open: bool | None = None) -> None:
         """记下「刚刚联网核实过，登录态还有效」。顺带更新「是否已开放」。

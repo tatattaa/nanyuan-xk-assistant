@@ -211,6 +211,66 @@ def _make_tray_icon(port: int, stop_cb) -> object:
     return icon
 
 
+def _browser_watchdog(
+    stop_cb,
+    icon_getter,
+    grace_s: float = 20.0,
+    notify_lead_s: float = 8.0,
+) -> None:
+    """窗口模式专用：浏览器全部关闭一段时间后，自动退出后端。
+
+    ⭐ 2026-10-02 用户要求「关闭浏览器时同步关闭后端」。设计要点：
+
+      · **信号** = 前端页面对 `/api/presence` 的 SSE 长连接。关页/关浏览器时它
+        **真实断开**，且不受「浏览器后台标签节流定时器」的影响 —— 比轮询可靠。
+      · **宽限期** `grace_s`：断开后要持续这么久仍无人重连才动手。刷新页面、
+        网络抖动都会在这段时间内自动重连，从而避免误退。
+      · `presence_idle == 0` 也包含「从来没连过」（例如 --no-browser 起服务、
+        或前端尚未建连）→ **绝不退出**，防止把后端自己关掉。
+      · **有抢课/蹲课在跑时**：先弹托盘通知提醒，再给 `notify_lead_s` 秒「最后机会」
+        （期间浏览器若回来则取消退出），之后照退 —— 用户 2026-10-02 明确选定。
+    """
+    from ui.state import RUNTIME
+
+    notified_at: float | None = None
+    while True:
+        time.sleep(1.5)
+        idle = RUNTIME.presence_idle
+        if idle <= 0:
+            notified_at = None          # 有人在线（或从未离线）→ 清掉提醒状态
+            continue
+        if idle < grace_s:
+            continue                    # 还在宽限期内（刷新 / 抖动）
+
+        if RUNTIME.has_active_task:
+            if notified_at is None:
+                icon = icon_getter()
+                msg = "检测到浏览器已关闭，但抢课仍在进行中，后端将在几秒后退出。"
+                if icon is not None:
+                    try:
+                        icon.notify(msg, "南苑抢课助手")
+                    except Exception:
+                        pass            # 通知失败不影响退出流程
+                print(f"  ⚠️ 浏览器已关闭，但仍有任务在跑 → {int(notify_lead_s)} 秒后退出后端")
+                notified_at = time.time()
+                continue
+            if time.time() - notified_at < notify_lead_s:
+                continue                # 「最后机会」窗口内，等用户可能回来
+
+        print("  浏览器已关闭（且无人在线），后端自动退出。")
+        # ⚠️ 必须先让托盘图标干净消失再退：`_stop_all` 最终走 `os._exit(0)` 强杀进程，
+        #    而强杀不会触发 pystray 的移除逻辑 → 通知区会留下「残影图标」，要等鼠标
+        #    划过才消失。（托盘点「停止服务」那条路不经过这里，它自己会 icon.stop()。）
+        icon = icon_getter()
+        if icon is not None:
+            try:
+                icon.stop()
+            except Exception:
+                pass
+        stop_cb()
+        return
+
+
 def pick_state_dir(port: int, mock: bool) -> Path | None:
     """给这个实例挑一个**隔离的**清单落盘目录；返回 None = 用户自己指定了，别动。
 
@@ -426,14 +486,32 @@ def main() -> int:
     _svr_thread.start()
 
     def _stop_all() -> None:
+        # ⭐ 先通知页面「后端要停了」：前端据此显示「服务已停止」并尝试关闭标签页。
+        #   （浏览器不允许服务器强制关闭标签页，所以只能「通知 + 尽力」。）
+        try:
+            from ui.state import RUNTIME
+
+            RUNTIME.request_shutdown()
+        except Exception:
+            pass
         try:
             _server.should_exit = True
         except Exception:
             pass
-        # 稍等让 uvicorn 停，然后退出进程
-        threading.Timer(1.0, lambda: os._exit(0)).start()
+        # 留 ~2s 让页面收到 shutdown 事件并处理完，再退出进程
+        # （在线通道 1.5s 一帧，2s 足够它把事件推出去）。
+        threading.Timer(2.0, lambda: os._exit(0)).start()
 
     icon = _make_tray_icon(a.port, _stop_all)
+
+    # ⭐ 关闭浏览器 → 自动退出后端（仅窗口模式；源码/控制台模式不动）。
+    #   见 _browser_watchdog 的设计说明：宽限期 + 有任务先提醒。
+    threading.Thread(
+        target=_browser_watchdog,
+        args=(_stop_all, lambda: icon),
+        daemon=True,
+    ).start()
+
     if icon is not None:
         try:
             icon.run()  # 阻塞，直到托盘菜单点「停止服务」

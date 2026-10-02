@@ -1124,12 +1124,24 @@ $('btnPassword').onclick = async () => {
   }
   btn.disabled = true; btn.textContent = '登录中…';
   try {
-    const r = await api('POST', '/api/session/password', { username: u, password: p });
+    // ⭐ 方案 A（2026-10-02）：登录与 init 拆开，先见界面、后填数据。
+    //   ① 只登录（with_init=false）—— 尽早拿到会话；
+    //   ② 立刻刷新状态 → session_state 变 unverified → renderGate 切进主界面；
+    //   ③ 再补 init + 各项数据（此时用户已看到主界面，不再盯着登录卡干等）。
+    //   登录卡上的等待从「登录+init」≈2.5s 降到「仅登录」≈1.5s。
+    await api('POST', '/api/session/password', { username: u, password: p, with_init: false });
     $('passInput').value = '';   // 立刻从界面清掉密码
     $('sessionMsg').innerHTML =
-      `<span class="pill ok"><span class="dot"></span>登录成功，抽取 ${r.field_count} 个上下文字段</span>`;
-    logLine(`账号密码登录成功（学号 ${u}），init 抽到 ${r.field_count} 个字段`, 'ok');
-    if (!r.is_open) logLine('提示：当前不在选课开放期，抢课需要等开放后再试', 'warn');
+      `<span class="pill ok"><span class="dot"></span>登录成功，正在加载选课上下文…</span>`;
+    logLine(`账号密码登录成功（学号 ${u}），正在加载选课上下文…`, 'ok');
+
+    // ② 切界面（不等 init）
+    await refreshState();
+
+    // ③ 补 init 与各面板数据
+    const ir = await api('POST', '/api/init');
+    logLine(`选课上下文就绪：抽取 ${ir.field_count} 个字段、${ir.tabs} 个课程类别`, 'ok');
+    if (!ir.is_open) logLine('提示：当前不在选课开放期，抢课需要等开放后再试', 'warn');
     await refreshState();
     await loadTabs();
     await loadSelected(true);
@@ -1137,6 +1149,9 @@ $('btnPassword').onclick = async () => {
   } catch (e) {
     $('sessionMsg').innerHTML = `<span class="pill err"><span class="dot"></span>${esc(e.message)}</span>`;
     logLine('账号密码登录失败：' + e.message, 'err');
+    // ⭐ 失败后把界面拉回与真实会话状态一致的位置：若 init 报「会话失效」，
+    //   后端已 detach，这里 refreshState 会把界面切回登录卡（而不是停在空白主界面）。
+    await refreshState().catch(() => {});
   } finally {
     btn.disabled = false; btn.textContent = '登 录';
   }
@@ -3504,6 +3519,18 @@ function throttleRefresh() {
   renderTimetable();
   const s = await refreshState();
   if (s && s.has_session) {
+    // ⭐ 2026-10-02：会话存在但尚未 init 时先补一次（方案 A 的配套）。
+    //   场景：登录成功（with_init=false）后用户立刻刷新页面 —— 此时后端可能还没
+    //   跑完 init，client.tabs 是空的，直接 loadTabs() 会让「课程类别」下拉变空。
+    //   失败也不致命（只记一条日志），下面的 loadTabs 等照常尝试。
+    if (!s.inited) {
+      try {
+        await api('POST', '/api/init');
+        await refreshState();
+      } catch (e) {
+        logLine('初始化选课上下文失败：' + e.message, 'err');
+      }
+    }
     await loadTabs();
     // 只读后台缓存。若服务重启过（缓存没了）loadSelected 会自己回退成真拉一次。
     await loadSelected(false);
@@ -3517,3 +3544,58 @@ function throttleRefresh() {
   setInterval(() => { refreshState(); maybeCheckSession(); }, 3000);
   maybeCheckSession();               // 进页面立刻核一次，不用等 45 秒
 })();
+
+/* ⭐ 在线检测通道（2026-10-02）：页面开着就保持一条 SSE 长连接。
+   两个用途：
+     1) 关闭页面/浏览器时连接**真实断开**，后端（exe 窗口模式）据此自动退出，
+        免去手动去托盘点「停止服务」；
+     2) 后端要退出时（托盘点「停止服务」/自动退出）会推 `shutdown` 事件，
+        页面据此提示「服务已停止」并**尝试**关闭标签页。
+
+   为什么不用定时心跳：浏览器会**节流后台标签的定时器**（可能降到每分钟一次），
+   用它判「人在不在」会误判；而连接断开不受节流影响。刷新页面会短暂断开并
+   自动重连 —— 后端留了宽限期，不会误退，所以 onerror 里不必急着处理。 */
+(function keepPresence() {
+  let fails = 0;
+  let handled = false;
+
+  /* 后端已没了（收到 shutdown，或重连反复失败）→ 尝试关闭本标签页；
+     关不掉（浏览器禁止服务器/脚本关闭「用户自己打开」的标签页）就显示提示，
+     免得继续留着一个点不动的假界面。 */
+  function onBackendGone() {
+    if (handled) return;
+    handled = true;
+    try { window.close(); } catch (e) { /* 多数浏览器会拒绝，交给下面的遮罩 */ }
+    // close 成功 → 页面已关，定时器不执行；失败 → 400ms 后显示提示遮罩
+    setTimeout(showStoppedOverlay, 400);
+  }
+
+  try {
+    const es = new EventSource('/api/presence');
+    es.onopen = () => { fails = 0; };
+    es.addEventListener('shutdown', onBackendGone);   // 后端主动通知（快，~2s 内）
+    es.onerror = () => {
+      // 兜底：后端崩溃、来不及发 shutdown 时，靠「重连连续失败」判定
+      fails += 1;
+      if (fails >= 4) onBackendGone();
+    };
+  } catch (e) { /* 极老浏览器不支持 EventSource：后端会因「从未连过」而不自动退出 */ }
+})();
+
+function showStoppedOverlay() {
+  if (document.getElementById('stoppedOverlay')) return;
+  const d = document.createElement('div');
+  d.id = 'stoppedOverlay';
+  d.style.cssText =
+    'position:fixed;inset:0;z-index:99999;background:#fff;display:flex;' +
+    'flex-direction:column;align-items:center;justify-content:center;gap:14px;' +
+    'font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#333;' +
+    'text-align:center;padding:24px';
+  d.innerHTML =
+    '<div style="font-size:44px;line-height:1">⏹️</div>' +
+    '<div style="font-size:20px;font-weight:700">服务已停止</div>' +
+    '<div style="font-size:14px;color:#666;max-width:22em">' +
+    '后端已退出，本页面已失效。你可以直接关闭这个标签页；' +
+    '需要继续使用就重新双击「南苑抢课助手」。</div>';
+  document.body.appendChild(d);
+}

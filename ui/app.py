@@ -90,6 +90,10 @@ class CdpBody(BaseModel):
 class PasswordBody(BaseModel):
     username: str = Field(..., description="学号")
     password: str = Field(..., description="密码（仅本机内存使用，不落盘、不上传）")
+    # ⭐ 2026-10-02：登录与 init 拆开。with_init=False 时只登录（建会话）不拉上下文，
+    #   让前端能「先切主界面、再异步加载」，把登录卡上的等待从 ~2.5s 降到 ~1.5s。
+    #   默认 True = 保持旧行为（登录 + init 一次返回），向后兼容。
+    with_init: bool = Field(True, description="是否紧接着执行 init（拉选课上下文）")
 
 
 class PlanItemBody(BaseModel):
@@ -256,13 +260,16 @@ def create_app() -> FastAPI:
     # 开启口令时：所有 /api/* 请求必须带正确口令（X-Access-Key 头或 ?key=），
     # 否则 401。放行：/api/access/status（前端先查"要不要口令"）、
     # /api/access/verify（校验口令本身）、静态文件与首页（前端要先加载）。
+    # ⭐ 另放行 /api/presence（2026-10-02）：它是「页面是否还开着」的在线信号，
+    #    不回传任何数据、无泄露风险；放行才能让「停在访问码页时关浏览器」也触发
+    #    后端自动退出（EventSource 无法自定义请求头，带口令很别扭）。
     _key = _access_key()
 
     @app.middleware("http")
     async def _guard(request, call_next):
         path = request.url.path
         if _key and path.startswith("/api/"):
-            if path not in ("/api/access/status", "/api/access/verify"):
+            if path not in ("/api/access/status", "/api/access/verify", "/api/presence"):
                 supplied = request.headers.get("x-access-key", "")
                 if not supplied:
                     supplied = request.query_params.get("key", "")
@@ -364,6 +371,14 @@ def create_app() -> FastAPI:
         except Exception as e:
             raise HTTPException(400, f"账号密码登录失败：{e}")
         sess = RUNTIME.attach_session(cred)
+        # ⭐ with_init=False：登录成功即返回（会话状态 = unverified，前端据此即可切进主界面）。
+        #   前端随后另行调用 POST /api/init 拉取上下文，做到「先见界面、后填数据」。
+        if not body.with_init:
+            return {
+                "ok": True,
+                "inited": False,
+                "source": sess.credential.source,
+            }
         return _do_init(sess)
 
     @app.delete("/api/session")
@@ -428,6 +443,50 @@ def create_app() -> FastAPI:
         if not sess:
             raise HTTPException(400, "尚未建立会话")
         return _do_init(sess, force=True)
+
+    @app.post("/api/init")
+    def do_init():
+        """初始化选课上下文（拉 Tab / 隐藏域 / 加密串）。
+
+        ⭐ 2026-10-02 与 `/api/session/password`（with_init=False）配套：
+        前端登录成功后先切主界面，再调本接口补齐上下文 —— 避免用户盯着登录卡等。
+        force=False：无缓存时同样会真打教务；已有当日缓存则直接复用（省一次往返）。
+        """
+        sess = RUNTIME.session
+        if not sess:
+            raise HTTPException(400, "尚未建立会话")
+        return _do_init(sess)
+
+    @app.get("/api/presence")
+    async def presence_stream():
+        """常驻在线通道（SSE）：页面开着就保持连接，页面/浏览器关闭即断开。
+
+        ⭐ 2026-10-02：为「关闭浏览器 → 后端自动退出」提供可靠信号（见 serve.py 守护线程）。
+        为什么用 SSE 而不是定时心跳：**浏览器会把后台标签的定时器节流**（可能降到每分钟
+        才跑一次），用它判「人在不在」会误判；而连接断开是浏览器关页时的**真实动作**，
+        不受节流影响。刷新页面会短暂断开并自动重连 —— 由调用方留宽限期兜住。
+        """
+        import asyncio
+
+        async def gen():
+            RUNTIME.presence_enter()
+            try:
+                while True:
+                    # 后端要退出了 → 推 shutdown 事件，页面据此提示/尝试关闭标签页
+                    # （服务器无法强制关标签页，这是浏览器的安全限制，只能「尽力」）。
+                    if RUNTIME.shutdown_requested:
+                        yield "event: shutdown\ndata: bye\n\n"
+                        break
+                    yield ": keepalive\n\n"
+                    await asyncio.sleep(1.5)
+            finally:
+                RUNTIME.presence_leave()
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # -- 查询（只读，可并发） -----------------------------------------------
 
