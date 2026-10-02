@@ -27,16 +27,11 @@
     POST /api/stop            停止抢课
     GET  /api/events          增量拉取事件（?since=N）
     GET  /api/events/stream   SSE 实时事件流
-    GET  /api/manual          说明书内容（外部优先 → 内置兜底）
-    PUT  /api/manual          保存说明书内容（原子覆盖）
-    POST /api/manual/image    上传说明书图片（原始字节流，文件名走 ?filename=）
-    GET  /manual-asset/{name} 说明书图片（外部优先 → 内置兜底；见下方注释，刻意不校验口令）
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -44,7 +39,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -80,61 +75,6 @@ if getattr(sys, "frozen", False):  # noqa: 仅打包态进入
 
 
 # ---------------------------------------------------------------------------
-# 说明书内容（「使用说明」弹窗的正文，支持界面上可视化编辑）
-# ---------------------------------------------------------------------------
-# ⭐ 2026-10-02：说明书正文改为**结构化的 JSON**，可以在界面上分块编辑，
-#   不再需要手写 HTML。内容存哪：
-#
-#   · **外部（可写）** = 程序目录下的 `manual/`
-#       源码模式 = 项目根 `C:/qiangke/manual/`
-#       exe 模式 = exe 所在目录 `.../manual/`
-#     ⚠️ 不能写进 `ui/static/` —— exe 里那个目录在 `_MEIPASS` **临时解压目录**中，
-#        是只读且重启即消失的，写进去等于没写。
-#
-#   · **内置（只读）** = 打包/随源码附带的那一份，只作**兜底**。
-#
-#   **读取顺序：外部优先 → 内置兜底。** 好处：改完立刻生效、不必重新打包；
-#   要分发给别人时再把内容一起打包进 exe 即可。
-MANUAL_JSON_NAME = "manual.json"
-MANUAL_MAX_IMAGE_BYTES = 8 * 1024 * 1024          # 单张图片上限 8MB
-MANUAL_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"}
-
-
-def _manual_root() -> Path:
-    """外部**可写**的说明书目录（不存在也照常返回路径，由调用方决定建不建）。"""
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent.parent        # ui/ 的上一级 = 项目根
-    return base / "manual"
-
-
-def _builtin_manual_root() -> Path:
-    """随程序附带、**只读**的说明书目录（兜底用）。"""
-    if getattr(sys, "frozen", False):
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            return Path(meipass) / "manual"
-    return Path(__file__).parent.parent / "manual"
-
-
-MANUAL_ROOT = _manual_root()
-BUILTIN_MANUAL_ROOT = _builtin_manual_root()
-
-
-def _manual_writable() -> bool:
-    """外部目录能不能写（不能写时前端把「编辑」按钮禁掉，别让用户白编辑一场）。"""
-    try:
-        MANUAL_ROOT.mkdir(parents=True, exist_ok=True)
-        probe = MANUAL_ROOT / ".write-test"
-        probe.write_text("", encoding="utf-8")
-        probe.unlink()
-        return True
-    except OSError:
-        return False
-
-
-# ---------------------------------------------------------------------------
 # 请求体
 # ---------------------------------------------------------------------------
 
@@ -154,12 +94,6 @@ class PasswordBody(BaseModel):
     #   让前端能「先切主界面、再异步加载」，把登录卡上的等待从 ~2.5s 降到 ~1.5s。
     #   默认 True = 保持旧行为（登录 + init 一次返回），向后兼容。
     with_init: bool = Field(True, description="是否紧接着执行 init（拉选课上下文）")
-
-
-class ManualBody(BaseModel):
-    """说明书内容（结构化 JSON）。形状只做最粗的校验 —— 内容本来就是用户自己的，
-    真正能不能渲染由前端负责，后端不替用户的内容把关。"""
-    manual: dict = Field(..., description='形如 {"version":1,"pages":[{"title":"…","blocks":[…]}]}')
 
 
 class PlanItemBody(BaseModel):
@@ -379,97 +313,6 @@ def create_app() -> FastAPI:
         if not str(target).startswith(str(STATIC_DIR.resolve())) or not target.exists():
             raise HTTPException(404, "not found")
         return FileResponse(target, headers=_NO_CACHE)
-
-    # -- 说明书：内容读取 / 保存 / 图片上传 -----------------------------------
-    #
-    # ⚠️ 图片路由放在 `/api/` **外面**（`/manual-asset/…`）：`<img src>` 没法带
-    #    `X-Access-Key` 头，跟 `/static/…` 一样不做口令校验。传的都是用户自己的
-    #    说明书截图，风险可接受；真正敏感的是 `/api/*`。
-    @app.get("/manual-asset/{name}", include_in_schema=False)
-    def manual_asset(name: str):
-        # 只接受纯文件名：防目录穿越（`.` 开头也一并挡掉，避免读到隐藏文件）
-        if not name or name.startswith(".") or "/" in name or "\\" in name:
-            raise HTTPException(404, "not found")
-        for root in (MANUAL_ROOT / "img", BUILTIN_MANUAL_ROOT / "img"):
-            p = root / name
-            if p.is_file():
-                return FileResponse(p, headers=_NO_CACHE)
-        raise HTTPException(404, "not found")
-
-    @app.get("/api/manual")
-    def get_manual():
-        """取说明书内容。**外部优先 → 内置兜底**；都没有则 source='none'，
-        前端会退化去读老的 `/static/manual.html`。
-
-        ⚠️ 返回的 `path` 一律是**保存目标**（程序目录下那一份），**不是**「这次从哪读到的」——
-        因为保存永远写 MANUAL_ROOT。内置兜底时若把 _MEIPASS（临时解压目录、重启即消失）
-        的路径报出去，编辑器底部就会显示一个下次开机不存在的地址。
-        「这次实际读的是哪个文件」放在 `source_path` 里，只做诊断用。"""
-        for root, src in ((MANUAL_ROOT, "external"), (BUILTIN_MANUAL_ROOT, "builtin")):
-            p = root / MANUAL_JSON_NAME
-            if p.is_file():
-                try:
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                except Exception as e:
-                    raise HTTPException(500, f"说明书内容文件解析失败（{p}）：{e}")
-                return {"manual": data, "source": src,
-                        "path": str(MANUAL_ROOT / MANUAL_JSON_NAME), "source_path": str(p),
-                        "writable": _manual_writable()}
-        return {"manual": None, "source": "none",
-                "path": str(MANUAL_ROOT / MANUAL_JSON_NAME),
-                "writable": _manual_writable()}
-
-    @app.put("/api/manual")
-    def put_manual(body: ManualBody):
-        pages = body.manual.get("pages")
-        if not isinstance(pages, list):
-            raise HTTPException(400, "说明书内容缺少 pages 数组")
-        try:
-            MANUAL_ROOT.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            raise HTTPException(500, f"无法创建说明书目录（{MANUAL_ROOT}）：{e}")
-        target = MANUAL_ROOT / MANUAL_JSON_NAME
-        tmp = target.with_name(target.name + ".tmp")
-        # ⭐ 先写临时文件再 os.replace 原子替换：写到一半被打断也不会毁掉原内容
-        #   （与抢课清单落盘同一个套路）。
-        try:
-            tmp.write_text(json.dumps(body.manual, ensure_ascii=False, indent=2) + "\n",
-                           encoding="utf-8")
-            os.replace(tmp, target)
-        except OSError as e:
-            raise HTTPException(500, f"保存失败：{e}")
-        logger.info("说明书已保存：%s（%d 页）", target, len(pages))
-        return {"ok": True, "path": str(target), "pages": len(pages),
-                "bytes": target.stat().st_size}
-
-    @app.post("/api/manual/image")
-    async def put_manual_image(request: Request, filename: str = Query("", description="原始文件名，仅用来取扩展名")):
-        """上传一张说明书图片。
-
-        ⚠️ 刻意**不用 multipart 表单**（那要装 python-multipart 依赖）：前端直接把
-        File 对象当 body 发原始字节流，文件名走 query。少一个依赖、也少一层解析。
-        存储文件名 = 内容 sha1 前 12 位 + 原扩展名 → **天然去重**，且不含任何用户可控字符。
-        """
-        data = await request.body()
-        if not data:
-            raise HTTPException(400, "图片内容为空")
-        if len(data) > MANUAL_MAX_IMAGE_BYTES:
-            raise HTTPException(400, f"图片太大（{len(data) / 1048576:.1f}MB），上限 "
-                                     f"{MANUAL_MAX_IMAGE_BYTES // 1048576}MB")
-        ext = Path(filename).suffix.lower()
-        if ext not in MANUAL_IMAGE_EXTS:
-            raise HTTPException(400, f"不支持的图片格式：{ext or '（没有扩展名）'}")
-        name = hashlib.sha1(data).hexdigest()[:12] + ext
-        img_dir = MANUAL_ROOT / "img"
-        try:
-            img_dir.mkdir(parents=True, exist_ok=True)
-            target = img_dir / name
-            if not target.exists():
-                target.write_bytes(data)
-        except OSError as e:
-            raise HTTPException(500, f"保存图片失败：{e}")
-        logger.info("说明书图片已保存：%s（%d 字节）", target, len(data))
-        return {"ok": True, "url": f"/manual-asset/{name}", "name": name, "bytes": len(data)}
 
     # -- 状态 ---------------------------------------------------------------
 

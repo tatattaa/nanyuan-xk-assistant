@@ -41,7 +41,6 @@
   <span class="pill" id="pillOpen"><span class="dot"></span>状态未知</span>
   <span class="pill" id="pillClock" title="本地时钟与教务服务器的偏差。定时开抢全靠它。"><span class="dot"></span>时钟未校准</span>
   <span class="pill" id="pillTask"><span class="dot"></span>空闲</span>
-  <button class="tiny" id="btnManual" title="查看使用说明">使用说明</button>
   <button class="tiny danger" id="btnDrop" title="清除本机会话，回到登录页" style="display:none">退出登录</button>
 </header>
 
@@ -423,74 +422,6 @@
   <!-- ⭐ 页脚：系统版本 + 免责声明（内容由 app.js::fillVersionFooter() 注入，改版本号只改一处） -->
   <div class="site-footer" data-footer></div>
 
-</div>
-
-<!-- ⭐ 使用说明书弹窗（2026-10-02）。
-     ⭐ 内容来源（外部优先 → 内置兜底，由后端 `/api/manual` 决定）：
-        ① 程序目录 `manual/manual.json`（可写，能在界面上「编辑内容」直接改）
-        ② 打包进 exe 的那一份（只读底稿）
-        ③ 都没有 → 退回读旧的 `/static/manual.html`（兼容老内容）
-     ⚠️ 本弹窗的 DOM 结构被 tests/verify_manual.js 钉着（按钮 id、页码、body 结构），
-        「编辑」是**另一个**弹窗（#manualEditModal），不要把它改造成编辑态。 -->
-<div id="manualModal" class="modal-mask" style="display:none" role="dialog" aria-modal="true" aria-labelledby="manualTitle">
-  <div class="modal-card">
-    <header class="modal-head">
-      <span id="manualTitle">使用说明</span>
-      <span class="spacer"></span>
-      <span class="m-pos" id="manualPos">— / —</span>
-      <button class="tiny" id="btnManualEdit" title="编辑说明书内容" disabled>编辑内容</button>
-      <button class="tiny" id="btnManualClose" title="关闭（也可以按 Esc 或点空白处）">关闭 ✕</button>
-    </header>
-    <div class="modal-body" id="manualBody">
-      <div class="empty">正在加载使用说明…</div>
-    </div>
-    <footer class="modal-foot">
-      <button class="tiny" id="btnManualPrev" title="上一页（←）">← 上一页</button>
-      <button class="tiny" id="btnManualNext" title="下一页（→）">下一页 →</button>
-      <span class="spacer"></span>
-      <label class="chk">
-        <input type="checkbox" id="manualNoAuto">
-        下次登录不再自动弹出
-      </label>
-    </footer>
-  </div>
-</div>
-
-<!-- ⭐ 说明书「可视化编辑」弹窗（2026-10-02）。
-     分块编辑：一页 = 若干块（段落 / 小标题 / 列表 / 图片 / 提示框 / 名词解释 / 表格），
-     每块可上移、下移、删除；图片「从电脑选文件」直接上传。
-     ⚠️ 刻意与阅读弹窗**分开**：阅读弹窗的 DOM 被 tests/verify_manual.js 钉着。 -->
-<div id="manualEditModal" class="modal-mask" style="display:none" role="dialog" aria-modal="true" aria-labelledby="manualEditTitle">
-  <div class="modal-card ed-card">
-    <header class="modal-head">
-      <span id="manualEditTitle">编辑使用说明</span>
-      <span class="m-pos" id="edState">—</span>
-      <span class="spacer"></span>
-      <button class="tiny" id="btnEditClose" title="关闭（未保存的改动会丢弃）">关闭 ✕</button>
-    </header>
-    <div class="modal-body" id="manualEditBody">
-      <div class="ed-src" id="edSrc"></div>
-      <div class="ed-pages" id="edPages"></div>
-      <label class="ed-title-row">
-        <span>本页标题</span>
-        <input type="text" id="edPageTitle" placeholder="例如：界面导航" autocomplete="off">
-      </label>
-      <div class="ed-blocks" id="edBlocks"></div>
-      <div class="ed-add">
-        <span class="ed-add-lb">新增块</span>
-        <select id="edNewType"></select>
-        <button class="tiny" id="btnAddBlock">+ 加一块</button>
-      </div>
-      <div class="ed-hint">拖动排序没有，用每块的 ↑ ↓；改完点右下角「保存」写回程序目录。
-        图片点「选择图片…」从本机选，会自动存进 <code>manual/img/</code>。</div>
-    </div>
-    <footer class="modal-foot">
-      <button class="tiny primary" id="btnEditSave">保存</button>
-      <button class="tiny" id="btnEditCancel">取消</button>
-      <span class="spacer"></span>
-      <span class="ed-path" id="edPath"></span>
-    </footer>
-  </div>
 </div>
 
 <script src="/static/app.js"></script>
