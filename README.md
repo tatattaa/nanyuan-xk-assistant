@@ -107,7 +107,7 @@
 
 ### 方式一：直接跑 exe（Windows，无需 Python）
 
-1. 下载 `南苑抢课助手.exe`；
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载最新版 exe（文件名形如 `nfu-qk-v1.1.0.exe`）；
 2. 双击运行（无黑窗，托盘图标提供「打开助手 / 停止服务」）；
 3. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
 
@@ -156,7 +156,8 @@ XK_SCHOOL_PROFILE=schools/你的学校.json python serve.py
 pip install pyinstaller pystray pillow
 python gen_icon.py            # 生成图标（首次）
 pyinstaller build.spec --noconfirm
-# 产物在 dist/南苑抢课助手.exe
+# 本地构建产物：dist/南苑抢课助手.exe
+# 发布到 Releases 时按惯例改名为 nfu-qk-<版本>.exe（如 nfu-qk-v1.1.0.exe）
 ```
 
 ## 项目结构
