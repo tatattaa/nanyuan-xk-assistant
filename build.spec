@@ -27,7 +27,11 @@ a = Analysis(
     ["serve.py"],
     pathex=["."],
     binaries=[],
-    datas=[("ui/static", "ui/static"), ("assets/icon-64.png", "assets"), ("schools", "schools")],
+    # ⭐ `manual/manual.json` = 「使用说明」的内置兜底底稿（`_MEIPASS/manual/`）。
+    #    运行时**外部优先**：exe 同级 `manual/manual.json` 一旦存在就压过它（用户改过的内容）。
+    #    ⚠️ 只打这个 JSON：`manual/img/` 是用户本机上传的截图，不该塞进 exe。
+    datas=[("ui/static", "ui/static"), ("assets/icon-64.png", "assets"), ("schools", "schools"),
+           ("manual/manual.json", "manual")],
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},

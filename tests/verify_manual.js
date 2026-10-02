@@ -99,19 +99,22 @@ async function connect(wsUrl) {
     await send('Page.navigate', { url: BASE + '/' });
     await sleep(2600);
 
-    // 前置：manual.html 本身可访问（别把 404 当成弹窗的 bug）
-    // ⚠️ 必须**先导航再 fetch**：相对路径在 about:blank 上会直接抛
-    //    "Failed to parse URL"（踩过）。
-    // ⚠️ 页数必须在**解析后的 DOM** 里数：文件开头的说明注释里也写着
-    //    `<section class="page">` 当示例，用正则数原始文本会把它算进去（多算 1）。
-    const raw = await ev(`fetch('/static/manual.html',{cache:'no-store'})
-      .then(r => Promise.all([r.status, r.text()]))
-      .then(([s, t]) => { const d = document.createElement('div'); d.innerHTML = t;
-        return s + '|' + d.querySelectorAll('section.page').length; })`);
-    const st = String(raw).split('|')[0];
-    const pagesInFile = Number(String(raw).split('|')[1]);
-    check('前置：/static/manual.html 可访问（200）', st === '200', `实际 ${st}`);
-    check(`前置：正文里写了 ${pagesInFile} 页`, pagesInFile >= 2, `实际 ${pagesInFile}`);
+    // 前置 ①：内容接口可用 —— 2026-10-02 起正文来源是**结构化内容** `GET /api/manual`
+    // ⚠️ 必须**先导航再 fetch**：相对路径在 about:blank 上会直接抛 "Failed to parse URL"（踩过）。
+    const man = await ev(`fetch('/api/manual',{cache:'no-store'}).then(r => r.json()).then(d => ({
+      source: d.source,
+      writable: !!d.writable,
+      pages: (d.manual && d.manual.pages) ? d.manual.pages.length : 0,
+      title0: (d.manual && d.manual.pages && d.manual.pages[0]) ? (d.manual.pages[0].title || '') : '',
+      title1: (d.manual && d.manual.pages && d.manual.pages[1]) ? (d.manual.pages[1].title || '') : '',
+    }))`);
+    check('前置：/api/manual 有结构化内容（来源 = 项目目录）',
+      man.source === 'external' && man.pages >= 2, JSON.stringify(man));
+
+    // 前置 ②：旧的 /static/manual.html 仍在（「一条结构化内容都没有」时的兜底）
+    const legacyStatus = await ev(`fetch('/static/manual.html',{cache:'no-store'}).then(r => r.status)`);
+    check('前置：旧版 /static/manual.html 仍可访问（200，兜底用）',
+      String(legacyStatus) === '200', `实际 ${legacyStatus}`);
 
     console.log('-- 打开方式 --');
     // ⚠️ 无会话时 `#topbar` 是 display:none（renderGate 控制），量之前必须先显示；
@@ -140,6 +143,12 @@ async function connect(wsUrl) {
     check('正文已加载（有 <h3> 小节）', opened.hasContent);
     check('页码初始为「1 / N」', /^1 \/ \d+$/.test(opened.pos), opened.pos);
 
+    // 「编辑内容」按钮：内容可写时才可点（开发态 = 项目目录，必然可写）
+    const edBtn = await ev(`(() => { const b = document.getElementById('btnManualEdit');
+      return { exists: !!b, text: b.textContent.trim(), disabled: b.disabled }; })()`);
+    check('弹窗里有「编辑内容」按钮', edBtn.exists && edBtn.text === '编辑内容', JSON.stringify(edBtn));
+    check('内容可写 →「编辑内容」可点', edBtn.disabled === false, JSON.stringify(edBtn));
+
     console.log('-- 分页翻页 --');
     const p1 = await ev(`(() => {
       const first = document.querySelector('#manualBody h3');
@@ -151,8 +160,9 @@ async function connect(wsUrl) {
         prevShown: getComputedStyle(document.getElementById('btnManualPrev')).display !== 'none',
       };
     })()`);
-    check(`页数 == 文件里的 section 数（${pagesInFile}）`, p1.pages === pagesInFile, `弹窗 ${p1.pages} / 文件 ${pagesInFile}`);
-    check('第一页就是文件里的第 1 个 section（「这是什么」）', p1.title === '这是什么', `实际「${p1.title}」`);
+    check(`页数 == /api/manual 里的页数（${man.pages}）`, p1.pages === man.pages,
+      `弹窗 ${p1.pages} / 接口 ${man.pages}`);
+    check(`第一页就是内容里的第 1 页（「${man.title0}」）`, p1.title === man.title0, `实际「${p1.title}」`);
     check('第 1 页「← 上一页」不可点', p1.prevDisabled);
     check('页数 > 1 时翻页按钮可见', p1.prevShown);
 
@@ -164,7 +174,8 @@ async function connect(wsUrl) {
       scrollTop: document.getElementById('manualBody').scrollTop,
     }))()`);
     check('点「下一页」→ 2 / N', p2.pos.startsWith('2 /'), p2.pos);
-    check('第 2 页内容换了（「界面导航」）', p2.title.trim() === '界面导航', `实际「${p2.title.trim()}」`);
+    check('第 2 页内容换了（就是内容里的第 2 页）',
+      p2.title.trim() === man.title1, `实际「${p2.title.trim()}」 / 期望「${man.title1}」`);
     check('翻页后回到页首（scrollTop 归零）', p2.scrollTop === 0, `scrollTop=${p2.scrollTop}`);
 
     await ev(`document.getElementById('btnManualPrev').click(); true`);
@@ -189,48 +200,69 @@ async function connect(wsUrl) {
     check(`连点下一页停在最后一页（${last.n} / ${last.n}）`, last.pos === `${last.n} / ${last.n}`, last.pos);
     check('最后一页「下一页 →」不可点', last.nextDisabled);
 
-    console.log('-- 图片 --');
+    console.log('-- 图片（img 块的渲染与坏图兜底）--');
+    // 内容改成结构化 JSON 之后，图片由 `{type:'img', url:'…'}` 这个块决定。
+    // 所以直接测**渲染器本身**的两条路径（不依赖说明书里恰好有图）：
+    //   ① 图存在 → <img> 正常渲染、等比缩放、不超宽
+    //   ② 图不存在 → 换成 .note.warn「图片没找到 → 路径」，不留破图
+    // ⚠️ 探针容器挂 `.modal-body` 这个 class，才能吃到 `.modal-body img` 的等比缩放规则。
+    // ⚠️ error 事件是**异步**的：插入后立刻读会读到「还没发生」→ 必须 触发 → sleep → 读（踩过）。
+    await ev(`(() => {
+      const box = document.createElement('div');
+      box.id = 'xk_probe_ok';
+      box.className = 'modal-body';
+      box.style.width = '600px';
+      document.body.appendChild(box);
+      box.appendChild(blockToEl({ type: 'img', url: '/static/manual/cover.png', cap: '示例图' }));
+      bindManualImages(box);
+      return true;
+    })()`);
+    await sleep(900);
     const imgs = await ev(`(() => {
-      // 回到第 1 页（有真实图片 cover.png）
-      document.getElementById('btnManualPrev').click();
-      // 一直退到第 1 页
-      for (let i = 0; i < 20; i++) document.getElementById('btnManualPrev').click();
-      const body = document.getElementById('manualBody');
-      const img = body.querySelector('img');
-      const cs = body.getBoundingClientRect();
-      const pad = parseFloat(getComputedStyle(body).paddingLeft) + parseFloat(getComputedStyle(body).paddingRight);
-      return img ? {
+      const box = document.getElementById('xk_probe_ok');
+      const img = box.querySelector('img');
+      if (!img) return { hasImg: false };
+      const cs = box.getBoundingClientRect();
+      const pad = parseFloat(getComputedStyle(box).paddingLeft) + parseFloat(getComputedStyle(box).paddingRight);
+      return {
         hasImg: true,
         natW: img.naturalWidth,
         natH: img.naturalHeight,
         w: Math.round(img.getBoundingClientRect().width),
         h: Math.round(img.getBoundingClientRect().height),
         availW: Math.round(cs.width - pad),
-        maxW: getComputedStyle(img).maxWidth,
-      } : { hasImg: false, page: document.getElementById('manualPos').textContent.trim() };
+        cap: (box.querySelector('.cap') || {}).textContent || '',
+      };
     })()`);
-    check('第 1 页的 <img> 正常渲染（naturalWidth > 0）', imgs.hasImg && imgs.natW > 0, JSON.stringify(imgs));
-    check('图片等比缩放、宽度不超出弹窗正文区', imgs.hasImg && imgs.w <= imgs.availW + 1,
+    check('img 块能渲染出图片（naturalWidth > 0）', imgs.hasImg && imgs.natW > 0, JSON.stringify(imgs));
+    check('图片等比缩放、宽度不超出可用宽度', imgs.hasImg && imgs.w <= imgs.availW + 1,
       `img=${imgs.w} 可用=${imgs.availW}`);
     check('图片没被压扁（高宽比与原图一致 ±2%）', imgs.hasImg
       && Math.abs(imgs.h / imgs.w - imgs.natH / imgs.natW) < 0.02, JSON.stringify(imgs));
+    check('图注 .cap 渲染出来了', imgs.cap === '示例图', imgs.cap);
 
-    // 第 2 页的 layout.png 不存在 → 应显示「图片没找到」而不是破图
-    // ⚠️ 图片的 error 事件是**异步**的：不能点完下一页就在同一次求值里读，
-    //    那时 404 还没回来（踩过 —— warnCount 会是 0、img 还留在 DOM 里）。
-    await ev(`document.getElementById('btnManualNext').click(); true`);
+    await ev(`(() => {
+      const box = document.createElement('div');
+      box.id = 'xk_probe_bad';
+      box.className = 'modal-body';
+      document.body.appendChild(box);
+      box.appendChild(blockToEl({ type: 'img', url: '/static/manual/__definitely_missing__.png' }));
+      bindManualImages(box);
+      return true;
+    })()`);
     await sleep(900);
     const broken = await ev(`(() => {
-      const w = document.querySelector('#manualBody .note.warn');
-      return { pos: document.getElementById('manualPos').textContent.trim(),
-               warnCount: document.querySelectorAll('#manualBody .note.warn').length,
+      const box = document.getElementById('xk_probe_bad');
+      const w = box.querySelector('.note.warn');
+      return { warnCount: box.querySelectorAll('.note.warn').length,
                text: w ? w.textContent.trim() : '',
-               imgLeft: document.querySelectorAll('#manualBody img').length };
+               imgLeft: box.querySelectorAll('img').length };
     })()`);
-    check('坏图所在页是第 2 页', broken.pos.startsWith('2 /'), broken.pos);
     check('图片路径写错时显示「图片没找到 → 路径」', broken.warnCount >= 1 && broken.text.includes('图片没找到'),
       JSON.stringify(broken));
     check('坏图已被替换掉（不残留 <img>）', broken.imgLeft === 0, `剩余 img=${broken.imgLeft}`);
+    await ev(`document.getElementById('xk_probe_ok').remove();
+              document.getElementById('xk_probe_bad').remove(); true`);
 
     console.log('-- 关闭方式 --');
     await ev(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})); true`);
