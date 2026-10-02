@@ -1157,6 +1157,9 @@ $('btnPassword').onclick = async () => {
     await loadTabs();
     await loadSelected(true);
     await loadAcademic();
+    // ⭐ 登录成功 → 自动弹一次使用说明（用户可在弹窗里勾「下次不再自动弹出」）。
+    //   放在最后：此时主界面数据已经填好，关掉说明书就能直接上手。
+    maybeShowManual();
   } catch (e) {
     $('sessionMsg').innerHTML = `<span class="pill err"><span class="dot"></span>${esc(e.message)}</span>`;
     logLine('账号密码登录失败：' + e.message, 'err');
@@ -3510,6 +3513,164 @@ function throttleRefresh() {
 }
 
 // ---------- 初始化 ----------
+
+/* ===== 使用说明书弹窗（2026-10-02）=====
+
+   ⭐ 正文**不在本文件里**：全部来自 `ui/static/manual.html`（一个 HTML 片段）。
+      所以「改说明书」= 只改那一个文件 —— 不用碰 app.js / index.html，也不用重新打包。
+      （每次打开弹窗都会重新拉一次，改完存盘立刻可见。）
+
+   ⭐ **一页一页翻**：manual.html 里每个 `<section class="page">…</section>` 就是一页，
+      一次只显示一页，用底部「上一页 / 下一页」或键盘 ← → 翻页。
+      ⚠️ 一个 `<section class="page">` 都没写时，兜底为「整份内容当成一页」。
+
+   ⭐ **图片**：把图片文件放进 `ui/static/manual/`，正文里写
+      `<img src="/static/manual/你的图片.png" alt="说明">` 即可（路径前缀固定是 /static/manual/）。
+
+   触发：① 登录成功后自动弹一次（弹窗底部可勾「下次登录不再自动弹出」）
+         ② 顶栏「使用说明」按钮随时手动打开
+   记忆：localStorage `xk_manual_auto`，值为 '0' 表示不再自动弹。 */
+const MANUAL_URL = '/static/manual.html';
+const MANUAL_AUTO_KEY = 'xk_manual_auto';
+let _manualPages = [];   // 每项 = 一页的 innerHTML
+let _manualPage = 0;     // 当前页下标（0 起）
+
+function syncManualCheckbox() {
+  const cb = $('manualNoAuto');
+  if (cb) cb.checked = localStorage.getItem(MANUAL_AUTO_KEY) === '0';
+}
+
+/* 把整份 manual.html 切成若干页。 */
+function parseManualPages(html) {
+  const box = document.createElement('div');
+  box.innerHTML = html;
+  const secs = [...box.querySelectorAll('section.page')];
+  if (secs.length) return secs.map((s) => s.innerHTML);
+  return [html];    // 兜底：没写 <section class="page"> 就整体当一页
+}
+
+/* 图片加载失败时给一句人话，而不是留个破图（用户最容易把路径写错）。
+   ⚠️ 不能只靠 error 事件：innerHTML 插入后浏览器**立刻**开始加载，
+   小图可能在监听器挂上之前就已经失败了 —— 所以补一个 `complete && naturalWidth===0` 的即时判定。 */
+function bindManualImages(root) {
+  const fail = (img) => {
+    if (img.dataset.failed) return;
+    img.dataset.failed = '1';
+    const tip = document.createElement('div');
+    tip.className = 'note warn';
+    tip.textContent = '图片没找到 → ' + (img.getAttribute('src') || '(没有 src)');
+    img.replaceWith(tip);
+  };
+  root.querySelectorAll('img').forEach((img) => {
+    img.addEventListener('error', () => fail(img));
+    if (img.complete && img.naturalWidth === 0) fail(img);
+  });
+}
+
+function setManualNav(total) {
+  const prev = $('btnManualPrev');
+  const next = $('btnManualNext');
+  $('manualPos').textContent = total ? (_manualPage + 1) + ' / ' + total : '— / —';
+  const multi = total > 1;
+  prev.style.display = multi ? '' : 'none';
+  next.style.display = multi ? '' : 'none';
+  prev.disabled = _manualPage <= 0;
+  next.disabled = _manualPage >= total - 1;
+}
+
+function renderManualPage() {
+  const body = $('manualBody');
+  const total = _manualPages.length;
+  if (!total) return;
+  _manualPage = Math.max(0, Math.min(_manualPage, total - 1));
+  body.innerHTML = _manualPages[_manualPage];
+  body.scrollTop = 0;
+  bindManualImages(body);
+  setManualNav(total);
+}
+
+function manualGo(delta) {
+  const t = _manualPage + delta;
+  if (t < 0 || t > _manualPages.length - 1) return;
+  _manualPage = t;
+  renderManualPage();
+}
+
+async function loadManual() {
+  const body = $('manualBody');
+  if (!body) return;
+  try {
+    // ⚠️ no-store：改完 manual.html 存盘后点「使用说明」应当**立刻**看到新内容，
+    //    不能被浏览器缓存挡住（后端 /static/ 也已带 no-cache 头，这里是双保险）。
+    const r = await fetch(MANUAL_URL, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const html = (await r.text()).trim();
+    _manualPages = html ? parseManualPages(html) : [];
+  } catch (e) {
+    _manualPages = [];
+    body.innerHTML =
+      '<div class="empty">读不到使用说明（' + esc(MANUAL_URL) + '）：' + esc(e.message) + '</div>';
+    setManualNav(0);
+    return;
+  }
+  if (!_manualPages.length) {
+    body.innerHTML =
+      '<div class="empty">说明书还是空的 —— 打开 ui/static/manual.html 写点内容吧</div>';
+    setManualNav(0);
+    return;
+  }
+  if (_manualPage >= _manualPages.length) _manualPage = 0;
+  renderManualPage();
+}
+
+function manualIsOpen() {
+  const m = $('manualModal');
+  return !!m && m.style.display !== 'none';
+}
+
+function openManual() {
+  const m = $('manualModal');
+  if (!m) return;
+  m.style.display = 'flex';
+  document.body.classList.add('modal-open');   // 弹窗开着时禁止背景滚动
+  syncManualCheckbox();
+  $('manualBody').scrollTop = 0;
+  loadManual();                                // 每次打开都重读：改完文件立刻可见
+}
+
+function closeManual() {
+  const m = $('manualModal');
+  if (!m) return;
+  m.style.display = 'none';
+  document.body.classList.remove('modal-open');
+}
+
+/* 登录成功后调用：只在用户没勾「不再自动弹出」时才弹。 */
+function maybeShowManual() {
+  if (localStorage.getItem(MANUAL_AUTO_KEY) !== '0') {
+    _manualPage = 0;   // 自动弹出时从第一页开始
+    openManual();
+  }
+}
+
+$('btnManual').onclick = () => { _manualPage = 0; openManual(); };
+$('btnManualClose').onclick = closeManual;
+$('btnManualPrev').onclick = () => manualGo(-1);
+$('btnManualNext').onclick = () => manualGo(1);
+$('manualModal').addEventListener('click', (e) => {
+  if (e.target === $('manualModal')) closeManual();   // 点卡片内部不关，点遮罩才关
+});
+$('manualNoAuto').onchange = (e) => {
+  localStorage.setItem(MANUAL_AUTO_KEY, e.target.checked ? '0' : '1');
+};
+document.addEventListener('keydown', (e) => {
+  if (!manualIsOpen()) return;
+  if (e.key === 'Escape') { closeManual(); return; }
+  // ⚠️ 只用 ← → 翻页：↑↓ / PageUp / PageDown 留给「页内滚动」，
+  //    否则长页面会翻不动、短页面又翻得莫名其妙。
+  if (e.key === 'ArrowLeft') { manualGo(-1); e.preventDefault(); }
+  if (e.key === 'ArrowRight') { manualGo(1); e.preventDefault(); }
+});
 
 /* ⭐ 把版本号与页脚填进页面（2026-10-02）。
    `data-ver` = 标题旁的小徽章；`data-footer` = 页面最底部的「系统版本 + 免责声明」。

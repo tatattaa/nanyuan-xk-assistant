@@ -105,6 +105,145 @@ html, body {
 }
 .site-footer .sf-disc b { font-weight: 600; color: var(--text-2); }
 
+/* ---------- 使用说明书弹窗（2026-10-02） ----------
+   正文内容**不在 CSS / 不在 JS**，全部来自 `ui/static/manual.html` ——
+   这里只负责弹窗外壳与正文的通用排版（h3 / ul / .note / .mt / .kv）。 */
+
+.modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;              /* 低于访问口令门（9999），高于顶栏（20） */
+  background: rgba(17, 24, 39, .45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.modal-card {
+  width: 100%;
+  max-width: 720px;
+  max-height: 84vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(16, 24, 40, .22);
+}
+.modal-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  font-weight: 600;
+}
+.modal-head .spacer { flex: 1; }
+.modal-body {
+  flex: 1;
+  min-height: 0;              /* ⚠️ 不写这条，flex 子项的最小高度会让它撑破卡片、滚不动 */
+  padding: 4px 20px 20px;
+  overflow-y: auto;
+}
+.modal-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;            /* 窄屏时「下一页 / 勾选」换行，不挤成一团 */
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+.modal-foot .spacer { flex: 1; }
+/* 页码（1 / 5）：等宽数字，翻页时宽度不跳 */
+.m-pos {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-3);
+  letter-spacing: .5px;
+  white-space: nowrap;
+}
+.chk {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.chk input { width: auto; margin: 0; flex: none; }
+
+/* 说明书正文排版 */
+.modal-body h3 {
+  font-size: 14px;
+  margin: 20px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.modal-body h3:first-child { margin-top: 12px; }
+.modal-body p { margin: 0 0 8px; }
+.modal-body ul, .modal-body ol { margin: 0 0 10px; padding-left: 22px; }
+.modal-body li { margin: 3px 0; }
+.modal-body code {
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.modal-body .note { margin: 10px 0; }
+.modal-body .empty { padding: 26px 0; }
+
+/* 说明书里的图片：等比缩放、不超出弹窗宽度。
+   ⚠️ 图片文件放 `ui/static/manual/`，正文写 <img src="/static/manual/xxx.png">。 */
+.modal-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 10px auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+/* 图注（放在 <img> 后面） */
+.modal-body .cap {
+  margin: -4px 0 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+/* 键值行：左「名词」右「解释」 */
+.kv {
+  display: flex;
+  gap: 10px;
+  padding: 6px 0;
+  font-size: 13px;
+  border-bottom: 1px dashed var(--border);
+}
+.kv:last-child { border-bottom: none; }
+.kv span { flex: none; width: 92px; color: var(--text-2); }
+.kv b { font-weight: 400; }
+
+/* 说明书里的表格 */
+.mt { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0 12px; }
+.mt th, .mt td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; }
+.mt th { background: var(--bg); font-weight: 600; color: var(--text-2); }
+
+/* 弹窗打开时禁止背景滚动（由 app.js 挂 body.modal-open） */
+body.modal-open { overflow: hidden; }
+
+@media (max-width: 720px) {
+  .modal-mask { padding: 12px; }
+  .modal-card { max-height: 90vh; }
+  .kv { flex-direction: column; gap: 2px; }
+  .kv span { width: auto; }
+}
+
 .wrap {
   max-width: 1080px;
   margin: 0 auto;

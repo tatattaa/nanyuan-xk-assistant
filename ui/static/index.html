@@ -41,6 +41,7 @@
   <span class="pill" id="pillOpen"><span class="dot"></span>状态未知</span>
   <span class="pill" id="pillClock" title="本地时钟与教务服务器的偏差。定时开抢全靠它。"><span class="dot"></span>时钟未校准</span>
   <span class="pill" id="pillTask"><span class="dot"></span>空闲</span>
+  <button class="tiny" id="btnManual" title="查看使用说明">使用说明</button>
   <button class="tiny danger" id="btnDrop" title="清除本机会话，回到登录页" style="display:none">退出登录</button>
 </header>
 
@@ -422,6 +423,32 @@
   <!-- ⭐ 页脚：系统版本 + 免责声明（内容由 app.js::fillVersionFooter() 注入，改版本号只改一处） -->
   <div class="site-footer" data-footer></div>
 
+</div>
+
+<!-- ⭐ 使用说明书弹窗（2026-10-02）。
+     正文**全部来自 `/static/manual.html`** —— 要改说明内容请改那个文件，别动这里。
+     本骨架只负责：遮罩、卡片、滚动区、关闭按钮、「下次不再自动弹」勾选。 -->
+<div id="manualModal" class="modal-mask" style="display:none" role="dialog" aria-modal="true" aria-labelledby="manualTitle">
+  <div class="modal-card">
+    <header class="modal-head">
+      <span id="manualTitle">使用说明</span>
+      <span class="spacer"></span>
+      <span class="m-pos" id="manualPos">— / —</span>
+      <button class="tiny" id="btnManualClose" title="关闭（也可以按 Esc 或点空白处）">关闭 ✕</button>
+    </header>
+    <div class="modal-body" id="manualBody">
+      <div class="empty">正在加载使用说明…</div>
+    </div>
+    <footer class="modal-foot">
+      <button class="tiny" id="btnManualPrev" title="上一页（←）">← 上一页</button>
+      <button class="tiny" id="btnManualNext" title="下一页（→）">下一页 →</button>
+      <span class="spacer"></span>
+      <label class="chk">
+        <input type="checkbox" id="manualNoAuto">
+        下次登录不再自动弹出
+      </label>
+    </footer>
+  </div>
 </div>
 
 <script src="/static/app.js"></script>
