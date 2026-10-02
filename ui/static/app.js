@@ -16,6 +16,17 @@
 //:    不要图省事把这个数调大 —— 那会把抢课也一起拖长。
 const MAX_ATTEMPTS = 20;
 
+//: ⭐ 版本号与免责声明（2026-10-02）。
+//:
+//: 🔴 **唯一权威就是这三行** —— 标题旁的版本徽章、页面最底部的页脚，
+//:    都由 `fillVersionFooter()` 从这里注入（index.html 里只放空壳 `data-ver` / `data-footer`）。
+//:    **改版本号只改 `APP_VERSION` 一处**，别去 HTML 里再写一遍（那必然漏改）。
+const APP_VERSION = 'v1.1.0';
+const SCHOOL_SYS = '正方教务系统 V-9.0';
+const DISCLAIMER =
+  '本工具仅供个人学习与技术研究使用，非学校官方工具，与学校及教务部门无关。' +
+  '请遵守学校教务管理规定，因使用本工具产生的一切后果（含选课结果、账号状态等）由使用者自行承担。';
+
 // ---------- 小工具 ----------
 
 const $ = (id) => document.getElementById(id);
@@ -3500,7 +3511,20 @@ function throttleRefresh() {
 
 // ---------- 初始化 ----------
 
+/* ⭐ 把版本号与页脚填进页面（2026-10-02）。
+   `data-ver` = 标题旁的小徽章；`data-footer` = 页面最底部的「系统版本 + 免责声明」。
+   只读上面那三个常量 —— 改版本号只改 `APP_VERSION` 一处。 */
+function fillVersionFooter() {
+  document.querySelectorAll('[data-ver]').forEach((el) => { el.textContent = APP_VERSION; });
+  const html =
+    '<div class="sf-line">南苑抢课助手 <b>' + esc(APP_VERSION) + '</b>' +
+    '<span class="sf-sep">·</span>' + esc(SCHOOL_SYS) + '</div>' +
+    '<div class="sf-disc"><b>免责声明</b>：' + esc(DISCLAIMER) + '</div>';
+  document.querySelectorAll('[data-footer]').forEach((el) => { el.innerHTML = html; });
+}
+
 (async function init() {
+  fillVersionFooter();       // 纯本地、无网络，先填上免得闪一下空白
   logLine('界面就绪。请输入学号和密码登录。', 'info');
   // ⭐ 访问口令是**第一道门**：先确保口令校验通过，再进登录门。
   // 不需要口令时 ensureAccess 会立即放行；需要时它会弹访问码层，等用户输对。

@@ -33,7 +33,7 @@
 </div>
 
 <header class="topbar" id="topbar" style="display:none">
-  <h1>南苑抢课助手</h1>
+  <h1>南苑抢课助手 <span class="ver" data-ver></span></h1>
   <span class="sub" id="schoolName">正方教务</span>
   <span class="spacer"></span>
   <span class="pill semester" id="pillSemester" title="当前选课轮次与选课时间（来自教务选课首页）">学期信息</span>
@@ -51,7 +51,7 @@
     <div class="login-brand">
       <img class="login-logo" src="/static/icon.svg" alt="南苑抢课助手">
       <div>
-        <h2>南苑抢课助手</h2>
+        <h2>南苑抢课助手 <span class="ver" data-ver></span></h2>
         <p class="login-sub" id="loginSchoolSub">正方教务</p>
       </div>
     </div>
@@ -74,6 +74,9 @@
 
     <div id="sessionMsg" class="login-msg"></div>
   </div>
+
+  <!-- ⭐ 页脚：系统版本 + 免责声明（内容由 app.js::fillVersionFooter() 注入，改版本号只改一处） -->
+  <div class="site-footer" data-footer></div>
 </div>
 
 <!-- 南苑抢课助手主体：登录成功后才显示 -->
@@ -415,6 +418,9 @@
       <div class="log" id="log"></div>
     </div>
   </section>
+
+  <!-- ⭐ 页脚：系统版本 + 免责声明（内容由 app.js::fillVersionFooter() 注入，改版本号只改一处） -->
+  <div class="site-footer" data-footer></div>
 
 </div>
 

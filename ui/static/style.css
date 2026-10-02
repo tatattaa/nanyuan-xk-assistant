@@ -65,6 +65,46 @@ html, body {
 .topbar .sub { color: var(--text-3); font-size: 12px; }
 .topbar .spacer { flex: 1; }
 
+/* ---------- 版本徽章 & 页脚（2026-10-02） ---------- */
+
+/* 标题旁的版本号：胶囊小标签，比标题弱、比正文小，不抢戏。
+   ⚠️ 文案由 app.js::fillVersionFooter() 从 APP_VERSION 注入，HTML 里只放空壳。 */
+.ver {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+  vertical-align: middle;
+  color: var(--text-3);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+/* 顶栏比登录卡矮一档，徽章再收一点，别把标题行撑高 */
+.topbar h1 .ver { padding: 0 6px; font-size: 10px; }
+
+/* 页脚：系统版本 + 免责声明。两处（登录门 / 主体）共用同一份样式与同一份内容。 */
+.site-footer {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--text-3);
+}
+.site-footer .sf-line { color: var(--text-2); }
+.site-footer .sf-line b { font-weight: 600; color: var(--text-2); }
+.site-footer .sf-sep { margin: 0 6px; color: var(--text-3); }
+.site-footer .sf-disc {
+  max-width: 620px;
+  margin: 4px auto 0;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.site-footer .sf-disc b { font-weight: 600; color: var(--text-2); }
+
 .wrap {
   max-width: 1080px;
   margin: 0 auto;
