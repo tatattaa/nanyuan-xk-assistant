@@ -103,6 +103,27 @@
 
 > 归纳成一句：**并发不是它的武器，纪律才是** —— 确定性、单线程、不该发的请求一个都不发。
 
+## 界面预览
+
+界面是一个跑在 `127.0.0.1` 的本地网页，纯 HTML/CSS/JS 手写、零依赖、零构建。
+
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/01-login.webp" alt="登录门"><br><sub><b>登录门</b> — 学号密码只在本机内存走一遍，不落盘、不上传；页面与页脚都写明版本与免责声明。</sub></td>
+<td width="50%"><img src="docs/screenshots/02-timetable.webp" alt="课表"><br><sub><b>课表</b> — 已抢 / 已选 / 待选（清单）三类分色标注，并按节次分区、虚线隔开跨时段课程；顶部横幅实时显示本轮选课期与本地时钟偏差。</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/03-filter-search.webp" alt="筛选与搜索"><br><sub><b>筛选 + 搜索</b> — 左侧按上课星期 / 节次 / 学分 / 是否重修 / 有无余量 / 只看时间冲突筛选；右侧按教学班或课程名检索，结果直接标出学分与「选班」入口。</sub></td>
+<td width="50%"><img src="docs/screenshots/04-conflict.webp" alt="时间冲突检测"><br><sub><b>时间冲突检测</b> — 搜索结果里用「可 / 满」圆点标出余量，并逐条列出与<b>已选课程</b>的冲突明细（周次、节次、课程名），不是只给一句「冲突」。</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="docs/screenshots/05-plan-wait.webp" alt="抢课清单与蹲课"><br><sub><b>抢课清单 + 蹲课</b> — 左侧管理待抢项，可设「抢到一门即停」与派发方式（轮流 / 串行）；右侧独立蹲课槽，按时间而非次数蹲「已满」课的退课名额。</sub></td>
+<td width="50%"><img src="docs/screenshots/06-course-list.webp" alt="已抢已选课程"><br><sub><b>已抢 / 已选课程</b> — 逐门列出时间、地点、教学班号与课程属性；<b>「能否退课」就是「是否真的抢到」的权威判据</b>，抢到的课右侧带红色「退课」按钮。</sub></td>
+</tr>
+</table>
+
+> 📷 截图为真实运行界面，已对个人与第三方信息（姓名、学号、教师姓名）做模糊处理。
+
 ## 快速开始
 
 ### 方式一：直接跑 exe（Windows，无需 Python）
