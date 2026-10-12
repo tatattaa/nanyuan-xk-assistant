@@ -1,11 +1,27 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller 打包配置（南苑抢课助手 · 本地 Web 界面）。
+r"""PyInstaller 打包配置（南苑抢课助手 · 本地 Web 界面）。
 
 入口 = serve.py（本地 Web UI，默认 127.0.0.1:8720）。
-产出：单文件 exe，静态文件（ui/static/*）打包进 _MEIPASS。
+产出：**onedir** 目录 —— `dist/南苑抢课助手/`（内含 `南苑抢课助手.exe` + `_internal/`），
+     静态文件（ui/static/*）打包进 `_internal`。
+
+⭐⭐ 为什么是 onedir 而不是 onefile（2026-10-12 改，实测依据见
+   `.workbuddy/memory/2026-10-03.md` 第八十七/八十八轮）：
+   onefile 每次启动都要把 ~46 MB 解压到 `%TEMP%\_MEIxxxxx\`、退出时再删掉同一批
+   文件，而每一轮解压到的是**新的随机目录** → 系统文件缓存天生吃不饱，Windows 上
+   每个文件还要过一次杀软扫描。
+   实测（同机同刻，到 `/api/state` 返回 200）：
+     · onefile 2,013 ms（1991/2026/2021）
+     · onedir  1,508 ms（1501/1514/1510）→ **快 25%，省约 0.5 s，极稳定**
+   `--help` 三元对比更能说明问题（同一 argparse 代码路径）：
+     · onedir 1.09 s ≈ 纯「解释器 + 导入」成本
+     · onefile 4.34 s → 多出来的 3.25 s **与导入无关**，全是「解压 46 MB + 退出删 46 MB」。
+   ⚠️ 本机 NVMe 上只差 0.5 s，但在**慢盘 / 带杀软 / 虚拟机 / 共享文件夹**里会明显放大
+      —— 那正是本项目用户实际遇到的场景（同一份 exe 在本机 2.0 s、在客户机 12–28 s）。
+   ⚠️ 代价：分发从「一个 exe」变成「一个目录」（47 MB），发布时打包成 zip。
 
 ⚠️ 只打包「真实教务」链路所需的资源。模拟模式（--mock）依赖 captures/ 抓包存档，
-   属开发/测试资产，**不**打进 exe（体积大且含原始接口流量）——打包后的 exe 仍可用
+   属开发/测试资产，**不**打进包（体积大且含原始接口流量）——打包后的 exe 仍可用
    `--real` 正常跑真实教务。
 """
 
@@ -55,12 +71,24 @@ hiddenimports = (
 #       按顶层包聚合条目数与体积 → 拿大户名去 `build/<name>/xref-build.html` 搜
 #       `<a name="X"></a>` 后面的 `imported by:` 找**真凶**。别硬啃源码，找不到的。
 #       详见 `.workbuddy/memory/2026-10-12.md`。
+#
+#    --- 2026-10-12 追加的三项（纯瘦身；⭐ 已实测「裁剪 ≠ 加速」，见下）---
+#    · watchfiles ← **uvicorn 的 `--reload` 监视器**（`_rust_notify.pyd` 0.6 MB）。
+#      本项目从不用 `--reload`（`uvicorn.run(..., log_level="warning")` 里没有它）。
+#    · setuptools ← 打进 PYZ **130 个模块 / 0.81 MB**（纯 Python 里最大一坨），
+#      外加 `pyi_rth_setuptools` 钩子。全仓 grep **零** `pkg_resources` /
+#      `importlib.metadata` 用法；排除后已跑完整离线回归 + exe 端到端确认无副作用。
+#    · pydoc_data ← `pydoc` 的联机帮助数据，无人使用。
+#      ⚠️ **这三项对「启动秒数」的贡献≈0**（PYZ 是惰性的：没被 import 的模块本来就不加载），
+#         收益是**磁盘体积与首次全盘扫描的文件数**。别指望它们提速。
 excludes = [
     "tests", "captures",
     # 被 Pillow / pydantic 间接蹭进来的可选依赖，见上
     "numpy", "numpy.libs", "pandas", "pandas.libs",
     "tzdata",
     "dateutil", "matplotlib", "scipy", "IPython",
+    # 2026-10-12：真·无用依赖（瘦身，不提速）
+    "watchfiles", "setuptools", "pydoc_data",
 ]
 
 a = Analysis(
@@ -79,12 +107,15 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
+# ⚠️ onedir 写法 = **两步**：
+#    ① `EXE(..., exclude_binaries=True)` —— 只产出启动器 exe，**不把 binaries/datas 塞进去**；
+#    ② `COLLECT(...)` —— 把 exe + binaries + datas 一起摆进 `dist/<name>/`。
+#    🔴 关键就是 ①，别漏：漏了 `exclude_binaries=True` 会打回 onefile（体积立刻回到 24 MB）。
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
+    exclude_binaries=True,
     name="南苑抢课助手",
     icon="assets/app.ico",  # exe 文件图标（assets/ 全套图标，gen_icon.py 生成）
     debug=False,
@@ -97,4 +128,13 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name="南苑抢课助手",
 )

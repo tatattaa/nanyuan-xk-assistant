@@ -128,11 +128,15 @@
 
 ### 方式一：直接跑 exe（Windows，无需 Python）
 
-1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载最新版 exe（文件名形如 `nfu-qk-v1.1.0.exe`）；
-2. 双击运行（无黑窗，托盘图标提供「打开助手 / 停止服务」）；
-3. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载最新版压缩包（文件名形如 `nfu-qk-v1.1.0-win64.zip`）；
+2. **解压到任意本地目录**（⚠️ 别放在网盘同步目录或虚拟机共享文件夹里运行，会非常慢）；
+3. 双击目录里的 `南苑抢课助手.exe`（无黑窗，托盘图标提供「打开助手 / 停止服务」）；
+4. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
 
-日志写在 exe 同目录的 `logs/` 下（可用环境变量 `XK_LOG_DIR` 改位置）。
+> 打包形态是 **onedir**（一个目录）而不是单文件 —— 单文件每次启动都要把 ~46 MB
+> 解压到 `%TEMP%` 再删除，实测慢约 **25%**，在带杀软扫描的机器上差距更大。
+
+日志写在 `logs/运行日志.log`（默认在程序目录；可用环境变量 `XK_LOG_DIR` 改位置）。
 
 ### 方式二：源码运行（需 Python 3.10+）
 
@@ -177,9 +181,16 @@ XK_SCHOOL_PROFILE=schools/你的学校.json python serve.py
 pip install pyinstaller pystray pillow
 python gen_icon.py            # 生成图标（首次）
 pyinstaller build.spec --noconfirm
-# 本地构建产物：dist/南苑抢课助手.exe
-# 发布到 Releases 时按惯例改名为 nfu-qk-<版本>.exe（如 nfu-qk-v1.1.0.exe）
+# 本地构建产物：dist/南苑抢课助手/南苑抢课助手.exe（onedir，整个目录一起分发）
+# 发布到 Releases 时把 dist/南苑抢课助手/ 压成 nfu-qk-<版本>-win64.zip
 ```
+
+> 用 **onedir** 而不是 onefile 是实测决定：onefile 每次启动要把 ~46 MB 解压到
+> `%TEMP%\_MEIxxxxx\`、退出时再删掉，而每一轮都是**新的随机目录**（吃不到系统
+> 文件缓存），Windows 上每个文件还要过一次杀软扫描。同机实测到 `/api/state` 就绪
+> 耗时 onefile **2,013 ms** vs onedir **1,508 ms**（快 25%）；`--help` 三元对比显示
+> onefile 多出的 3.25 s **与导入无关**，全是解压 + 删除那 46 MB。
+> ⚠️ 本机 NVMe 上差 0.5 s，在慢盘 / 带杀软 / 虚拟机 / 共享文件夹里会明显放大。
 
 ## 项目结构
 

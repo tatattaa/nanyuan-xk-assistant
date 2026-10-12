@@ -31,11 +31,58 @@ sys.path.insert(0, str(Path(__file__).parent))
 # ⭐ 窗口模式（console=False，无黑窗）下 sys.stdout/sys.stderr 是 None，
 #   print 会直接崩。所以先判断：None 时把 stdout/stderr 重定向到日志文件，
 #   让横幅/口令/报错都写进文件（方案 B：后台静默运行 + 日志文件）。
+def _app_root() -> Path:
+    """应用根目录：`state/`（落盘）、`logs/`（日志）相对它定位。
+
+    🔴 不能用 `Path(__file__).parent` 了事 —— **exe（onefile）模式下 `__file__`
+    指向 PyInstaller 的临时解压目录 `%TEMP%\\_MEIxxxxx\\`**，而那个目录
+    「**每次启动都是新的随机名**、进程退出就被删」。拿它当落盘根，等于每次
+    都从零开始：清单 / 蹲课清单 / 课程快照**全都活不过一次重启**，界面上的
+    「📂 上次数据」也永远是空的。
+
+    （2026-10-12 实测确认：跑 `dist/南苑抢课助手.exe` 时，state 被建到了
+     `%TEMP%\\_MEI000013c02\\state\\`，而用户真正的数据在 `<项目根>\\state\\`。）
+
+    规则：
+      · 源码模式 → `serve.py` 所在目录（= 项目根）
+      · exe 模式 → 从 exe 自己所在目录**向上最多找 3 层**，第一个含 `serve.py`
+                    的祖先就是项目根；找不到就用 exe 所在目录。这样两种打包布局
+                    都能对上，好让「同一份代码，源码跑 / exe 跑」看到的是**同一批数据**：
+                      `<项目根>/dist/南苑抢课助手.exe`          （onefile）
+                      `<项目根>/dist/南苑抢课助手/南苑抢课助手.exe` （onedir，2026-10-12 起）
+      ⚠️ 用户把 exe（或整个目录）拷到桌面单独用时，一路上没有 `serve.py` →
+         落在 exe 同级目录，**数据跟着走**，正是想要的。
+
+    🔴 **新增任何「要跨进程存活」的路径，先 grep 一遍是不是又漏了它。**
+       （2026-10-12：`_runtime_log_path()` 就是漏掉的那一处 —— 它原先直接用
+        `Path(sys.executable).parent`，于是本地跑 exe 时日志跑进 `dist/` 里、
+        和 `state/` 分了家。）
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent
+    exe_dir = Path(sys.executable).resolve().parent
+    cur = exe_dir
+    for _ in range(3):
+        if (cur / "serve.py").exists():
+            return cur
+        if cur.parent == cur:          # 到盘根了，别再往上
+            break
+        cur = cur.parent
+    return exe_dir
+
+
 def _runtime_log_path() -> Path:
-    """日志文件放哪：默认 exe/脚本同目录下的 logs/（通用化，别人机器也能用）。
+    """日志文件放哪：默认 **应用根**（`_app_root()`）下的 logs/。
+
+    ⭐ 为什么不是「exe 同目录」（2026-10-12 改）：本地跑打包产物时 exe 在
+       `dist/南苑抢课助手/` 里，日志就会落在 `dist/...` 下，而 `state/` 在项目根
+       —— 同一台机器上的「数据」与「日志」分了家，排查时要两头找。
+       改成 `_app_root()` 之后：本地跑 exe 与源码跑**共用同一个 `logs/运行日志.log`**；
+       用户把整个目录拷到别处单独用时（一路上没有 `serve.py`）→ 仍落在 exe 同级，
+       别人机器上照样能用。
 
     可用环境变量 XK_LOG_DIR 覆盖成任意目录（如 C:\\qiangke\\logs）。
-    目录不存在会自动建；建失败则降级到 exe 或脚本同目录。
+    目录不存在会自动建；建失败则降级到应用根。
     """
     # 1) 用户显式指定（XK_LOG_DIR）
     env = os.environ.get("XK_LOG_DIR")
@@ -46,11 +93,8 @@ def _runtime_log_path() -> Path:
             return d / "运行日志.log"
         except OSError:
             pass
-    # 2) 默认：exe/脚本同目录的 logs/
-    if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
-    else:
-        base = Path(__file__).parent
+    # 2) 默认：应用根下的 logs/
+    base = _app_root()
     d = base / "logs"
     try:
         d.mkdir(parents=True, exist_ok=True)
@@ -261,29 +305,64 @@ def local_ip() -> str:
         s.close()
 
 
-def open_browser_when_ready(urls: list[str], port: int, wait_s: float = 8.0) -> None:
+#: 本地页最多等服务就绪多久才开（秒）。
+#: ⚠️ 2026-10-12 从 8 s 提到 60 s，并**取消「超时也照开」**：慢机器（虚拟机 /
+#:    Defender 按打开扫描 / 共享文件夹里的 exe）上 8 s 根本不够，而原来「超时照开」
+#:    的结果是弹出一个「无法访问此网站」 —— 用户体感就是「等很久，而且打不开」。
+#:    宁可多等一会儿，也别开出一个错页（等不到就只记一行，交给托盘/日志）。
+BROWSER_WAIT_S = 60.0
+
+
+def open_browser_when_ready(urls: list[str], port: int, wait_s: float = BROWSER_WAIT_S) -> None:
     """等服务起来后用系统默认浏览器打开页面（后台线程，不阻塞主进程）。
 
-    - 先探测本机端口是否可连（uvicorn 起好后端口就 LISTENING 了）；
-    - 超时仍连不上也照开（万一探测方式在个别环境失灵，别让用户白等）；
+    - **外网页（教务系统）立刻开** —— 它不依赖本地服务；
+    - **本地页必须等到端口真能连上才开**（上限 `wait_s`）；超时则**不开**，
+      只打印一行说明（宁可让用户看到托盘图标和日志，也别开出一个错误页）。
+    - 顺序：外网页在前、本地页在后 → 最后打开的那个标签页成为当前停留页，
+      正好是「抢课助手」。
     - 只开一次，异常静默吞掉（开浏览器失败不该拖垮服务本身）。
     """
     import threading
     import webbrowser
+    from urllib.parse import urlsplit
+
+    def _is_local(u: str) -> bool:
+        try:
+            return (urlsplit(u).hostname or "") in ("127.0.0.1", "localhost", "::1")
+        except Exception:
+            return False
+
+    def _open(u: str) -> None:
+        try:
+            webbrowser.open(u)
+        except Exception as e:
+            print(f"  ⚠️ 自动打开浏览器失败（{u}）：{e}")
 
     def _run() -> None:
+        remote = [u for u in urls if not _is_local(u)]
+        local = [u for u in urls if _is_local(u)]
+
+        for u in remote:                      # 教务页不用等本地服务
+            _open(u)
+
+        if not local:
+            return
         deadline = time.monotonic() + wait_s
+        ready = False
         while time.monotonic() < deadline:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=1):
+                    ready = True
                     break
             except OSError:
                 time.sleep(0.3)
-        for u in urls:
-            try:
-                webbrowser.open(u)
-            except Exception as e:
-                print(f"  ⚠️ 自动打开浏览器失败（{u}）：{e}")
+        if not ready:
+            print(f"  ⚠️ 本地服务 {wait_s:.0f} 秒内没起来 → **不**打开本地页面"
+                  f"（免得开出一个「无法访问此网站」）。请看托盘图标或 logs/ 里的运行日志。")
+            return
+        for u in local:
+            _open(u)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -488,32 +567,6 @@ def _browser_watchdog(
                 pass
         stop_cb()
         return
-
-
-def _app_root() -> Path:
-    """应用根目录：`state/`（落盘）相对它定位。
-
-    🔴 不能用 `Path(__file__).parent` 了事 —— **exe（onefile）模式下 `__file__`
-    指向 PyInstaller 的临时解压目录 `%TEMP%\\_MEIxxxxx\\`**，而那个目录
-    「**每次启动都是新的随机名**、进程退出就被删」。拿它当落盘根，等于每次
-    都从零开始：清单 / 蹲课清单 / 课程快照**全都活不过一次重启**，界面上的
-    「📂 上次数据」也永远是空的。
-
-    （2026-10-12 实测确认：跑 `dist/南苑抢课助手.exe` 时，state 被建到了
-     `%TEMP%\\_MEI000013c02\\state\\`，而用户真正的数据在 `<项目根>\\state\\`。）
-
-    规则：
-      · 源码模式 → `serve.py` 所在目录（= 项目根）
-      · exe 模式 → exe 自己所在目录；若它处在 `<项目根>/dist/xxx.exe` 这种打包
-                   产物布局（上一级还留着 `serve.py`），则回到 `<项目根>` ——
-                   好让「同一份代码，源码跑 / exe 跑」看到的是**同一批数据**。
-    """
-    if not getattr(sys, "frozen", False):
-        return Path(__file__).resolve().parent
-    exe_dir = Path(sys.executable).resolve().parent
-    if (exe_dir.parent / "serve.py").exists():
-        return exe_dir.parent
-    return exe_dir
 
 
 def pick_state_dir(port: int, mock: bool) -> Path | None:
