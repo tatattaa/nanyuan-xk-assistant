@@ -23,6 +23,46 @@ hiddenimports = (
     + ["core.browser"]  # 函数内延迟 import，静态分析抓不到，需显式声明
 )
 
+# 🔴 `excludes` 里那一串**必须留着**，理由不是「我们用不到」，而是「它们是被别人
+#    **蹭**进来的」—— 只看源码是找不到的：
+#
+#    · numpy ← **Pillow**。`PIL/_typing.py` 顶层写着 `import numpy.typing as npt`
+#      （外面用 try/except ImportError 包着，属**纯可选**支持），可 PyInstaller 的
+#      静态分析不看 try/except → 只要打包环境里装着 numpy，就把整包拖进来。
+#      实测代价：`numpy.libs` 20.2 MB + `numpy` 6.1 MB ≈ **26 MB**
+#      （2026-10-12 实测：23.4 MB → 33.7 MB，就是它干的）。
+#      `serve.py::_tray_image()` 只用 PIL 画图、从不碰数组，排掉零副作用。
+#    · tzdata ← **pydantic → zoneinfo**（Windows 上没有系统时区库，得靠它兜底）。
+#      ⚠️ **只占 0.49 MB，却是全包最大的启动杀手**：它把 605 个时区文件散着塞进
+#      CArchive，而我们全包一共才 685 条 —— 88% 的**文件数**、1% 的**体积**。
+#      onefile 要逐文件解压到 `_MEIxxxxx\`，Windows 上每个文件还要过一次杀软
+#      扫描 → 605 × ~21 ms ≈ **13 秒**。这就是「明明体积砍了 10 MB，启动却从
+#      3.7 s 变成 17.3 s」的全部原因（实测 confirmed）。
+#      本项目**从不调用 `ZoneInfo("Asia/Shanghai")` 这类命名时区**，只用
+#      `datetime.timezone.utc` 和 `timedelta(hours=8)`（见 `core/clock.py`），
+#      排掉零影响。`_zoneinfo.pyd`（标准库的 C 模块，1 个条目）照常保留。
+#    · pandas / python-dateutil ← 2026-10-09 被打包环境里装上的，本项目一行不用；
+#      这次打包其实没进去（xref 里 0 次），列出只为**兜底**。
+#    · matplotlib / scipy / IPython ← 同理兜底，防「装着就进包」。
+#
+#    ⭐ **教训：打包后要看两个数，不是只看体积** ——
+#       ① 体积（`--help` 三元对比 / 归档解压总量）
+#       ② **归档条目数**（`pyi-archive_viewer -l -r`）。条目数暴涨 = 每个文件一次
+#          解压+扫描，秒数直接乘上去。`tzdata` 就是「体积看不出来、条目数骗不了人」
+#          的典型。
+#
+#    ⚠️ 排查手法（下次体积/启动又不对了照做）：`pyi-archive_viewer -l -r <exe>`
+#       按顶层包聚合条目数与体积 → 拿大户名去 `build/<name>/xref-build.html` 搜
+#       `<a name="X"></a>` 后面的 `imported by:` 找**真凶**。别硬啃源码，找不到的。
+#       详见 `.workbuddy/memory/2026-10-12.md`。
+excludes = [
+    "tests", "captures",
+    # 被 Pillow / pydantic 间接蹭进来的可选依赖，见上
+    "numpy", "numpy.libs", "pandas", "pandas.libs",
+    "tzdata",
+    "dateutil", "matplotlib", "scipy", "IPython",
+]
+
 a = Analysis(
     ["serve.py"],
     pathex=["."],
@@ -33,7 +73,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tests", "captures"],
+    excludes=excludes,
     noarchive=False,
 )
 

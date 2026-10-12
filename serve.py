@@ -347,6 +347,32 @@ def _browser_watchdog(
         return
 
 
+def _app_root() -> Path:
+    """应用根目录：`state/`（落盘）相对它定位。
+
+    🔴 不能用 `Path(__file__).parent` 了事 —— **exe（onefile）模式下 `__file__`
+    指向 PyInstaller 的临时解压目录 `%TEMP%\\_MEIxxxxx\\`**，而那个目录
+    「**每次启动都是新的随机名**、进程退出就被删」。拿它当落盘根，等于每次
+    都从零开始：清单 / 蹲课清单 / 课程快照**全都活不过一次重启**，界面上的
+    「📂 上次数据」也永远是空的。
+
+    （2026-10-12 实测确认：跑 `dist/南苑抢课助手.exe` 时，state 被建到了
+     `%TEMP%\\_MEI000013c02\\state\\`，而用户真正的数据在 `<项目根>\\state\\`。）
+
+    规则：
+      · 源码模式 → `serve.py` 所在目录（= 项目根）
+      · exe 模式 → exe 自己所在目录；若它处在 `<项目根>/dist/xxx.exe` 这种打包
+                   产物布局（上一级还留着 `serve.py`），则回到 `<项目根>` ——
+                   好让「同一份代码，源码跑 / exe 跑」看到的是**同一批数据**。
+    """
+    if not getattr(sys, "frozen", False):
+        return Path(__file__).resolve().parent
+    exe_dir = Path(sys.executable).resolve().parent
+    if (exe_dir.parent / "serve.py").exists():
+        return exe_dir.parent
+    return exe_dir
+
+
 def pick_state_dir(port: int, mock: bool) -> Path | None:
     """给这个实例挑一个**隔离的**清单落盘目录；返回 None = 用户自己指定了，别动。
 
@@ -355,15 +381,18 @@ def pick_state_dir(port: int, mock: bool) -> Path | None:
     的事故；清单落盘之后，同样的手滑会从「内存被清」升级成「磁盘文件被覆盖」。
     所以默认值必须取安全的那一侧：
 
-        · 8720（用户日常端口）        → <项目根>/state/plan.json
-        · 其它端口（隔离测试实例）    → <项目根>/state/p<端口>/plan.json
-        · --mock（模拟模式）          → <项目根>/state/mock/plan.json
+        · 8720（用户日常端口）        → <应用根>/state/plan.json
+        · 其它端口（隔离测试实例）    → <应用根>/state/p<端口>/plan.json
+        · --mock（模拟模式）          → <应用根>/state/mock/plan.json
+
+    ⚠️「应用根」怎么取见 `_app_root()` —— exe 模式下**必须**避开 PyInstaller 的
+    临时解压目录，否则落盘等于没落（2026-10-12 修）。
 
     想完全关掉落盘，把 `XK_STATE_DIR` 显式设成 `off`。
     """
     if os.environ.get("XK_STATE_DIR", "").strip():
         return None  # 用户显式指定（含 off）→ 一律尊重
-    root = Path(__file__).resolve().parent
+    root = _app_root()
     if mock:
         return root / "state" / "mock"
     if port == MAIN_PORT:
