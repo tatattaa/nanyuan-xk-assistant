@@ -14,7 +14,7 @@ const CHROME = process.env.CHROME
 const DEBUG_PORT = Number(process.env.XK_CDP_PORT || 9805);
 const BASE = (process.env.XK_BASE || 'http://127.0.0.1:8721').replace(/\/$/, '');
 const PROFILE = path.join(os.tmpdir(), 'xk_ver_footer_profile');
-const VERSION = 'v1.1.0';
+const VERSION = 'v1.2.0';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const fails = [];

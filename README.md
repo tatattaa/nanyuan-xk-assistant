@@ -128,7 +128,7 @@
 
 ### 方式一：安装包（Windows，推荐）
 
-1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载 `nfu-qk-v1.1.0-setup.exe`（约 18 MB）；
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载 `nfu-qk-v1.2.0-setup.exe`（约 18 MB）；
 2. 双击安装 —— 默认装到 **`%LOCALAPPDATA%\南苑抢课助手\`**，**不需要管理员权限**（不弹 UAC）；
 3. 从开始菜单启动「南苑抢课助手」（安装时可勾选创建桌面快捷方式，默认不勾）；
 4. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
@@ -145,7 +145,7 @@
 
 ### 方式二：绿色压缩包（免安装，Windows）
 
-1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载压缩包（文件名形如 `nfu-qk-v1.1.0-win64.zip`）；
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载压缩包（文件名形如 `nfu-qk-v1.2.0-win64.zip`）；
 2. **解压到任意本地目录**（⚠️ 别放在网盘同步目录或虚拟机共享文件夹里运行，会非常慢；
    ⚠️ 也别解压到需要管理员权限才能写入的目录，理由同上）；
 3. 双击目录里的 `南苑抢课助手.exe`（无黑窗，托盘图标提供「打开助手 / 停止服务」）；

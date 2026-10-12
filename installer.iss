@@ -24,7 +24,7 @@
 
 #define AppName "南苑抢课助手"
 #define AppNameEn "nanyuan-xk-assistant"
-#define AppVersion "1.1.0"
+#define AppVersion "1.2.0"
 #define AppExe "南苑抢课助手.exe"
 #define AppSrc "dist\onedir-安装包版\南苑抢课助手"
 #define RepoURL "https://github.com/tatattaa/nanyuan-xk-assistant"
@@ -68,11 +68,11 @@ MinVersion=10.0
 ; ⚠️ 本安装包**没有代码签名**（无证书）⇒ 用户首次运行会被 SmartScreen 拦
 ;    「未知发布者」，点「更多信息 → 仍要运行」即可。这不是安装包能解决的问题。
 
-VersionInfoVersion=1.1.0
+VersionInfoVersion=1.2.0
 VersionInfoCompany=tatattaa
 VersionInfoDescription={#AppName} 安装程序
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion=1.1.0
+VersionInfoProductVersion=1.2.0
 
 [Languages]
 Name: "chinese"; MessagesFile: "installer\ChineseSimplified.isl"

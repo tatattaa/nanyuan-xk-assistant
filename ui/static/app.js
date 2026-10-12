@@ -21,7 +21,7 @@ const MAX_ATTEMPTS = 20;
 //: 🔴 **唯一权威就是这三行** —— 标题旁的版本徽章、页面最底部的页脚，
 //:    都由 `fillVersionFooter()` 从这里注入（index.html 里只放空壳 `data-ver` / `data-footer`）。
 //:    **改版本号只改 `APP_VERSION` 一处**，别去 HTML 里再写一遍（那必然漏改）。
-const APP_VERSION = 'v1.1.0';
+const APP_VERSION = 'v1.2.0';
 const SCHOOL_SYS = '正方教务系统 V-9.0';
 const DISCLAIMER =
   '本工具仅供个人学习与技术研究使用，非学校官方工具，与学校及教务部门无关。' +
