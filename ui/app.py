@@ -14,8 +14,10 @@
     POST /api/probe           重新 init 并返回上下文摘要
     GET  /api/clock           时钟校准状态（?samples=N 先采样）
     GET  /api/courses         查课程（query 只读，可指定 kklxdm；结果会顺手落盘）
-    GET  /api/courses/snapshot/load  取回上次搜索落盘的课程数据（离线，未开放期用来回看）
-    GET  /api/classes         查某课程教学班（可指定 kklxdm）
+    GET  /api/courses/snapshot/load  取回上次搜索落盘的课程数据（离线，未开放期用来回看；
+                                     ?key=<kklxdm|kklxmc> 精确指定某一桶）
+    GET  /api/classes         查某课程教学班（可指定 kklxdm；结果会顺手落盘）
+    GET  /api/classes/snapshot/load  取回上次展开落盘的教学班数据（离线，未开放期用来选班）
     GET  /api/tabs            课程类别 Tab 列表（每个 Tab 独立加密串）
     GET  /api/selected        查已选课程（?cached=1 只读内存缓存，不打教务）
     GET  /api/academic        学生学业情况统计（只读；课程性质学分对照 + 基础信息）
@@ -57,8 +59,10 @@ from engine.plan import MAX_ATTEMPTS, Plan, PlanItem, normalize_retry_mode, pars
 from ui.state import (
     RUNTIME,
     PlanConflict,
+    load_classes_snapshot,
     load_courses_bucket,
     pick_courses_bucket,
+    save_classes_snapshot,
     save_courses_bucket,
 )
 
@@ -251,6 +255,36 @@ def _access_key() -> str:
     就设好这个变量（与 XK_SCHOOL_URL 同风格），所以这里 import 时读一次即可。
     """
     return os.environ.get("XK_ACCESS_KEY", "").strip()
+
+
+def _tab_kklxdm(sess, tab_index: int) -> str:
+    """按 Tab 下标取课程类别代码（取不到返回空）。
+
+    ⚠️ 落盘教学班数据时必须能定位「这是哪个类别下的班」：两个「板块课」的
+    `kklxdm` 都是 06，只存代码无法区分，所以`tab_index` 也要一起存（调用方已存）。
+    """
+    try:
+        tabs = getattr(sess.client, "tabs", None) or []
+        if 0 <= tab_index < len(tabs):
+            return tabs[tab_index].kklxdm or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _tab_kklxmc(sess, tab_index: int, kklxdm: str = "") -> str:
+    """按 Tab 下标取课程类别**名称**（类别名在我校是唯一的，比代码更能认人）。"""
+    try:
+        tabs = getattr(sess.client, "tabs", None) or []
+        if 0 <= tab_index < len(tabs):
+            return tabs[tab_index].name or ""
+        if kklxdm:
+            for t in tabs:
+                if (t.kklxdm or "") == kklxdm:
+                    return t.name or ""
+    except Exception:
+        pass
+    return ""
 
 
 def create_app() -> FastAPI:
@@ -633,11 +667,16 @@ def create_app() -> FastAPI:
         return {"rows": rows, "meta": meta, "count": len(rows)}
 
     @app.get("/api/courses/snapshot/load")
-    def load_courses_snapshot(kklxdm: str = "", kklxmc: str = ""):
+    def load_courses_snapshot(kklxdm: str = "", kklxmc: str = "", key: str = ""):
         """取回「上次搜索保存下来的课程数据」（离线，不打教务）。
 
         典型用法 = 未开放期：教务查不了课，把上次搜到的拿出来看。
-        匹配按「精确 → 类别名 → kklxdm」三级回退（教务可能改过类别名/下标）。
+        匹配按「`key` 精确 → 精确 key → 类别名 → kklxdm」四级回退
+        （教务可能改过类别名/下标）。
+
+        `key` 是桶的完整 key（`kklxdm|kklxmc`）。**离线浏览时一律走这条**：
+        两个「板块课」的 kklxdm 都是 06，只给 kklxdm 会命中错的那一桶 ——
+        用户点「大英一」，列表里却全是体育课。
 
         没能匹配上时**不报 5xx、也不给别的类别的数据**，而是如实返回
         `ok=False` + `available`（有哪些类别可看）——
@@ -646,7 +685,11 @@ def create_app() -> FastAPI:
         summ = RUNTIME.courses_snapshot
         if not summ:
             raise HTTPException(400, "本地还没有保存过课程数据（先在有会话时搜索一次）")
-        bucket = pick_courses_bucket(summ, kklxdm=kklxdm, kklxmc=kklxmc)
+        bucket = None
+        if key:
+            bucket = next((b for b in summ.get("buckets") or [] if b.get("key") == key), None)
+        if bucket is None:
+            bucket = pick_courses_bucket(summ, kklxdm=kklxdm, kklxmc=kklxmc)
         if bucket is None:
             return {
                 "ok": False,
@@ -666,7 +709,16 @@ def create_app() -> FastAPI:
                 "bucket": bucket, "available": summ.get("buckets") or []}
 
     @app.get("/api/classes")
-    def classes(kch_id: str, kklxdm: str = "", tab_index: int = Query(-1, ge=-1)):
+    def classes(
+        kch_id: str,
+        kklxdm: str = "",
+        tab_index: int = Query(-1, ge=-1),
+        # ⭐ 课程号（CNFU001439 这种）与课程名。只用于**落盘时给这份教学班数据
+        #   留个可读的抬头**（未开放期界面上要显示「离线教学班：品味数学」）。
+        #   不传也能跑，只是落盘条目里的 kch / kcmc 会退化成课程名或空。
+        kch: str = "",
+        kcmc: str = "",
+    ):
         sess = RUNTIME.session
         if not sess:
             raise HTTPException(400, "尚未建立会话")
@@ -718,7 +770,68 @@ def create_app() -> FastAPI:
                     "slots": [s.as_dict() for s in entry.slots],
                 }
             )
+        # ⭐ 顺手把这次的教学班结果落盘（2026-10-12 用户要求）。
+        #
+        # 为什么写在这里而不是让前端另调一个「存一下」的接口：与课程快照同理 ——
+        # 未开放期**根本发不出查询**，教学班数据只可能来自开放期那几次展开；
+        # 只要有一次前端忘了调，用户就会在未开放期发现「这门课点开是空的」，
+        # 而失败原因极难排查。写在这里是「无论如何都会存」。
+        #
+        # ⚠️ 只在 items 非空时写：一次失败 / 空结果绝不能把已有的好数据冲掉
+        #（未开放期查不到，被空结果覆盖就**永久**丢了）。
+        # ⚠️ 落盘失败只记日志，绝不影响本次返回（铁律：落盘是锦上添花）。
+        if items:
+            if save_classes_snapshot(
+                kch_id=kch_id,
+                kch=kch or "",
+                kcmc=kcmc or (items[0].get("kcmc") or ""),
+                kklxdm=kklxdm or _tab_kklxdm(sess, tab_index),
+                kklxmc=_tab_kklxmc(sess, tab_index, kklxdm),
+                tab_index=tab_index,
+                items=items,
+                semester=RUNTIME.semester_key(),
+            ):
+                # 摘要缓存作废：下一次 /api/state 就能让界面显示「📂 离线教学班」
+                RUNTIME.invalidate_classes_cache()
         return {"items": items}
+
+    @app.get("/api/classes/snapshot/load")
+    def load_classes(kch_id: str, kklxdm: str = ""):
+        """取回「上次展开保存下来的教学班数据」（离线，不打教务）。
+
+        与 `/api/classes` 返回**同一个 items 结构** —— 前端两条路共用一套渲染，
+        免得「实时列表能看、离线列表长得不一样」。
+
+        ⚠️ 离线数据里的 `do_id` 是**上次查询下发的一次性令牌**，早就作废了。
+        这里**统一清空它**再返回，理由：
+          · 留着它，界面会拿它当「这个班在不在清单里」的比对键（见 app.js::isInPlan），
+            而清单里存的是另一个令牌，必然对不上 → 把「已在清单里」显示成「+ 加入」；
+          · 万一真被原样提交，教务只会回一句「请求被拒」，还不如当场就不带。
+        令牌会在开抢运行时由引擎按 `jxb_id` 重新解析（engine/runner.py::_resolve_do_id）。
+        界面必须把这件事**说清楚**，不能假装点一下就能直接提交。
+        """
+        entry = load_classes_snapshot(kch_id)
+        if not entry:
+            return {
+                "ok": False,
+                "items": [],
+                "reason": "本地没有保存过这门课的教学班数据（先在开放期展开一次「选班」）",
+            }
+        items = []
+        for it in entry.get("items") or []:
+            if isinstance(it, dict):
+                items.append({**it, "do_id": ""})
+        logger.info(
+            "加载教学班快照：%s（%s）共 %d 个班（保存于 %s）",
+            kch_id, entry.get("kcmc") or entry.get("kch") or "-", len(items),
+            time.strftime("%m-%d %H:%M", time.localtime(entry.get("saved_at") or 0)),
+        )
+        return {
+            "ok": True,
+            "items": items,
+            "count": len(items),
+            "entry": {k: v for k, v in entry.items() if k != "items"},
+        }
 
     @app.get("/api/selected")
     def selected(cached: int = Query(0, ge=0, le=1)):

@@ -452,6 +452,126 @@ _courses_file.unlink(missing_ok=True)
 
 print()
 print("=" * 62)
+print("D. 教学班数据落盘（「上次展开过的教学班」，按课程号分条）")
+print("=" * 62)
+
+_cls_file = S.classes_path()
+expect("教学班快照是**第三个**文件（与 plan.json / courses.json 互不干扰）",
+       _cls_file is not None
+       and len({_cls_file.name, plan_file.name, _courses_file.name}) == 3,
+       f"{_cls_file} / {plan_file} / {_courses_file}")
+expect("文件名是常量 classes.json",
+       '_CLASSES_FILE = "classes.json"' in _state_src)
+expect("教学班落盘也是「先写 .tmp 再 os.replace」原子替换",
+       "os.replace(tmp, p)" in _state_src.split("def save_classes_snapshot")[1])
+
+_items = [{"jxb_id": "J1", "do_id": "TOK1", "kcmc": "空手道", "yxzrs": "30"},
+          {"jxb_id": "J2", "do_id": "TOK2", "kcmc": "空手道", "yxzrs": "40"}]
+
+expect("空教学班列表**不**写盘（未开放期查不回来，绝不能被空结果冲掉已有数据）",
+       S.save_classes_snapshot(kch_id="K1", items=[]) is False and not _cls_file.exists())
+expect("没有课程号 → 不写盘", S.save_classes_snapshot(kch_id="", items=_items) is False)
+
+expect("落盘成功且文件出现",
+       S.save_classes_snapshot(
+           kch_id="K1", kch="9022200125", kcmc="空手道", kklxdm="06",
+           kklxmc="板块课(大学体育（一）)", tab_index=1, items=_items,
+           semester="2026-2027|1") is True and _cls_file.exists())
+
+entry = S.load_classes_snapshot("K1")
+expect("读回：items 原样都在（含一次性令牌 —— 落盘不负责清它）",
+       [i["jxb_id"] for i in entry.get("items") or []] == ["J1", "J2"],
+       f"{entry.get('items')}")
+expect("⭐ 读回：tab_index 保留（离线加清单靠它定位板块 —— 两个板块课 kklxdm 都是 06，"
+       "只靠 kklxdm 会定位错板块）",
+       entry.get("tab_index") == 1, f"{entry.get('tab_index')!r}")
+expect("读回：抬头字段齐全（kch / kcmc / kklxdm / kklxmc / semester）",
+       (entry.get("kch"), entry.get("kcmc"), entry.get("kklxdm"),
+        entry.get("kklxmc"), entry.get("semester"))
+       == ("9022200125", "空手道", "06", "板块课(大学体育（一）)", "2026-2027|1"),
+       f"{entry}")
+expect("读回：count 与 items 长度一致",
+       entry.get("count") == len(entry.get("items") or []) == 2)
+expect("没存过的课 → {}（不是异常）", S.load_classes_snapshot("KZZZ") == {})
+expect("空课程号 → {}（不是异常）", S.load_classes_snapshot("") == {})
+
+summ_cls = S.classes_snapshot_summary()
+expect("摘要：exists / count=1 门 / total=2 个班",
+       summ_cls.get("exists") is True and summ_cls.get("count") == 1
+       and summ_cls.get("total") == 2, f"{summ_cls}")
+expect("摘要：带保存时刻 + 每条的学期与课程名（界面要显示「有哪些课离线还能选班」）",
+       bool(summ_cls.get("saved_at"))
+       and summ_cls["courses"][0].get("semester") == "2026-2027|1"
+       and summ_cls["courses"][0].get("kcmc") == "空手道")
+expect("摘要里**不带** items（摘要要小，完整内容走 load 那条路）",
+       "items" not in (summ_cls.get("courses") or [{}])[0])
+
+# --- 多门课共处一文件：展开第二门不能冲掉第一门 -----------------------------
+S.save_classes_snapshot(kch_id="K2", kcmc="高等数学", kklxdm="01", kklxmc="主修课程",
+                        tab_index=0, items=[{"jxb_id": "M1", "kcmc": "高等数学"}],
+                        semester="2026-2027|1")
+expect("⭐ 又展开一门课 → 两门课都在（不是单槽覆盖）",
+       S.classes_snapshot_summary().get("count") == 2
+       and {c["kch_id"] for c in S.classes_snapshot_summary()["courses"]} == {"K1", "K2"},
+       f"{S.classes_snapshot_summary()}")
+S.save_classes_snapshot(kch_id="K1", kcmc="空手道", kklxdm="06", kklxmc="板块课(大学体育（一）)",
+                        tab_index=1, items=[{"jxb_id": "J9", "kcmc": "空手道"}],
+                        semester="2026-2027|1")
+expect("⭐ 同一门课再展开一次 → 只覆盖它自己那一门，别的课不受影响",
+       [i["jxb_id"] for i in S.load_classes_snapshot("K1")["items"]] == ["J9"]
+       and S.classes_snapshot_summary().get("count") == 2,
+       f"{S.load_classes_snapshot('K1').get('items')}")
+
+# --- 上限：单门课截断 -------------------------------------------------------
+S.save_classes_snapshot(kch_id="KBIG", kcmc="超大课", kklxdm="09",
+                        items=[{"jxb_id": f"B{i}"} for i in range(99)],
+                        semester="2026-2027|1")
+expect(f"单门课最多存 {S.CLASSES_MAX_ITEMS} 个班（正常一门十几个班，加上限防异常数据撑爆文件）",
+       S.load_classes_snapshot("KBIG").get("count") == S.CLASSES_MAX_ITEMS,
+       f"{S.load_classes_snapshot('KBIG').get('count')}")
+_files_now = sorted(f.name for f in S.STATE_DIR.iterdir() if not f.name.endswith(".tmp"))
+expect("⭐ 教学班那份就落成 classes.json（与清单 / 课程数据各占一个文件，互不干扰）",
+       "classes.json" in _files_now, f"{_files_now}")
+
+expect("clear_classes_snapshot() → 删文件且摘要变空",
+       S.clear_classes_snapshot() and S.classes_snapshot_summary() == {})
+
+# --- 跨学期：教学班数据要**独立**作废 ---------------------------------------
+# WHY：条目里带着**上学期的 kklxdm / tab_index**。留着它，未开放期展开出来的班会被
+#      当成本学期的，加进清单后运行时按错的下标定位板块（两个板块课 kklxdm 都是 06）。
+rt8 = S.Runtime()
+S.save_classes_snapshot(kch_id="K1", kcmc="空手道", kklxdm="06", kklxmc="板块课(大学体育（一）)",
+                        tab_index=1, items=_items, semester="2025-2026|2")
+rt8._session = _FakeSess()          # 当前学期 = 2026-2027|1
+v8 = rt8.reconcile_plan_semester()
+expect("⭐ 只有教学班数据是上学期的 → 也必须作废（跟课程数据同进同退）",
+       v8.get("dropped") is True and S.classes_snapshot_summary() == {}, f"{v8}")
+expect("日志说清作废的是「本地保存的教学班数据」并带上它原来的学期",
+       any("教学班数据" in e["message"] and "2025-2026|2" in e["message"]
+           for e in rt8.events_since(0)),
+       f"{[e['message'] for e in rt8.events_since(0)]}")
+
+# --- 坏文件容错 -------------------------------------------------------------
+_cls_file.parent.mkdir(parents=True, exist_ok=True)
+_cls_file.write_text("{ 坏 JSON", encoding="utf-8")
+expect("教学班快照损坏 → 当作「没有快照」，不抛异常",
+       S.read_classes_snapshot() == {} and S.classes_snapshot_summary() == {}
+       and S.load_classes_snapshot("K1") == {})
+_cls_file.unlink(missing_ok=True)
+
+# --- 源码层钉死：接口必须清掉一次性令牌 -------------------------------------
+# do_id 是**一次性**加密令牌，每次查询重新下发。落盘那份里的早废了，
+# 不清掉的话前端 `isInPlan` 拿它比对必然对不上 → 已加入的课显示成「+ 加入」。
+_app_src = (Path(__file__).resolve().parents[1] / "ui" / "app.py").read_text(encoding="utf-8")
+expect("⭐ /api/classes/snapshot/load 取回时把 do_id 统一清空（令牌是一次性的）",
+       'do_id": ""' in _app_src or "do_id': ''" in _app_src)
+expect("界面按稳定的 jxb_id 判断「是否已加入」（不靠每次都会换的 do_id）",
+       "p.jxb_id === jxb.jxb_id" in (
+           Path(__file__).resolve().parents[1] / "ui" / "static" / "app.js"
+       ).read_text(encoding="utf-8"))
+
+print()
+print("=" * 62)
 if _fails:
     print(f"✗ {len(_fails)} 条未通过：")
     for f in _fails:

@@ -209,6 +209,11 @@
       </div>
       <div class="body tight">
         <div class="note info" id="courseHint" style="margin-bottom:8px;display:none"></div>
+        <!-- 「快照类别」条：落盘课程按课程类别分了桶，这里让用户**在离线状态下
+             切换看哪一类**。未开放期上面那个「课程类别」下拉是空的（拿不到 Tab），
+             没有这条就永远只能看最近搜过的那一类（2026-10-12 用户报的 bug）。
+             由 renderSnapCats() 控制显隐，只在「正在看落盘数据」时出现。 -->
+        <div class="snapcats" id="snapCats" style="display:none"></div>
         <div class="list" id="courseList">
           <div class="empty">输入关键词后点击「搜索」</div>
         </div>

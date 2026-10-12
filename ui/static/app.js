@@ -104,6 +104,12 @@ const S = {
   snapshot: null,    // **磁盘上**「上次保存的数据」的元信息（只读）；内存有清单时为 null
   snapshotDismissed: false, // 本次会话内用户已点 ✕ 收起「上次保存的数据」条（不删磁盘快照）
   coursesSnap: null, // **磁盘上**「上次搜到的课程」的摘要（按课程类别分桶）
+  classesSnap: null, // **磁盘上**「上次展开过的教学班」的摘要（按课程号）
+  // ⭐ 当前正在看的**落盘快照桶**（`{key,kklxdm,kklxmc,tab_index,saved_at}`）；
+  //    null = 课程列表是**实时搜索**的结果。离线加清单时必须靠它拿 tab_index：
+  //    未开放期课程类别下拉是空的 → `currentTabIndex()` 恒为 -1，而两个「板块课」
+  //    的 kklxdm 都是 06，只靠 kklxdm 会把「大英一」的课解析到「大学体育」板块去。
+  snapBucket: null,
   clock: null,       // 时钟校准快照（/api/state 下发的 clock）
   schedule: null,    // 定时开抢信息 {start_at, warmup_s, fire_lead_s, server_now}
   credit: null,      // 学分要求快照（/api/state 下发的 credit，含清单待加选学分）
@@ -410,6 +416,9 @@ async function refreshState(opts) {
     // 磁盘上「上次搜到的课程」的摘要（按课程类别分桶）。它**不随内存清单清空** ——
     // 课程数据是查课期攒下来的素材，清单加载进内存之后照样可能想回看。
     S.coursesSnap = (s.courses_snapshot && s.courses_snapshot.exists) ? s.courses_snapshot : null;
+    // 磁盘上「上次展开过的教学班」的摘要（按课程号）。同样不随内存清单清空 ——
+    // 它是「未开放期也能选班」的前提。
+    S.classesSnap = (s.classes_snapshot && s.classes_snapshot.exists) ? s.classes_snapshot : null;
     renderCoursesSnapBtn();
     // 「开始」按钮的可用状态统一由 updateStartBtn() 判定（含"拨到了过去"这条）
     updateStartBtn();
@@ -1117,6 +1126,10 @@ function onTabChange() {
   S.courses = [];
   $('courseList').innerHTML = '<div class="empty">类别已切换，请重新搜索</div>';
   renderCourseHint('');
+  // 切了**真实**类别 → 列表已经清空，之前那份「离线快照」上下文作废。
+  // ⚠️ 必须一起清：留着它，下一次「选班」「加入清单」会拿上一个类别的
+  //    tab_index/kklxdm 去执行 —— 界面显示的是新类别、执行的是旧类别（撒谎）。
+  clearSnapCtx();
   // 按钮文案带的是「当前类别上次存了几条」→ 换类别就得跟着变
   renderCoursesSnapBtn();
 }
@@ -1257,6 +1270,63 @@ function pickCoursesBucket(snap) {
     || null;
 }
 
+/* ---------- 离线快照上下文（「正在看落盘数据」这件事本身）----------
+
+   为什么需要它：未开放期「课程类别」下拉是空的（Tab 只在开放期的 Index 页出现，
+   见 core/client.py::_adopt_tabs），`currentTabIndex()` 恒为 -1、`currentTab()` 恒为 null。
+   但离线数据是**有类别**的（桶里存着 kklxdm / kklxmc / tab_index），
+   加清单时如果拿不到它，两个「板块课」的 kklxdm 都是 06 → 运行时会把
+   「大英一」的课解析到「大学体育」板块去，抢了个寂寞。
+   所以看落盘数据时，把「这一桶是谁」记在 S.snapBucket 里，执行路径优先读它。 */
+
+function clearSnapCtx() {
+  S.snapBucket = null;
+  hideSnapCats();
+}
+
+/* 执行期该用哪个 Tab 下标：离线用桶里的，实时用下拉的。 */
+function ctxTabIndex() {
+  const b = S.snapBucket;
+  if (b && Number.isFinite(b.tab_index)) return b.tab_index;
+  return currentTabIndex();
+}
+
+/* 「快照类别」条：把落盘课程里的每个类别桶列成可点按钮 —— 这就是「离线切换课程类别」。
+
+   🔴 为什么不直接把快照类别塞进上面那个「课程类别」下拉：那个下拉的 value 是
+   `S.tabs` 的**下标**，搜索/选班/加清单全靠它反查类别。往一个空的 S.tabs 里
+   塞快照类别，value 就再也对不上 S.tabs —— 点「搜索」或「加入清单」会拿错类别，
+   正是本项目最忌讳的「界面显示值 ≠ 执行值」。所以离线导航单独做一条，
+   只负责**换一份数据来看**，并且在加载成功时把 S.snapBucket 设好（执行路径读它）。 */
+function renderSnapCats(buckets, curKey) {
+  const el = $('snapCats');
+  if (!el) return;
+  const list = buckets || [];
+  if (list.length < 1) { hideSnapCats(); return; }
+  el.style.display = '';
+  el.innerHTML = '<span class="muted">快照类别：</span>' + list.map((b) => {
+    const on = (b.key || '') === (curKey || '');
+    const t = b.saved_at
+      ? new Date(b.saved_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
+    const nm = b.kklxmc || b.kklxdm || '未命名';
+    return `<button class="tiny${on ? ' cur' : ''}" data-key="${esc(b.key || '')}"`
+      + ` ${on ? 'disabled' : ''}`
+      + ` title="${esc(nm)}（${b.count} 个教学班${b.keyword ? `，关键词「${b.keyword}」` : ''}，保存于 ${esc(t)}）`
+      + `${on ? ' —— 正在看这一类' : ' —— 点一下看这一类'}">`
+      + `${esc(nm)}（${b.count}）</button>`;
+  }).join('');
+  el.querySelectorAll('button[data-key]').forEach((btn) => {
+    btn.onclick = () => loadCoursesSnapshot(btn.dataset.key);
+  });
+}
+
+function hideSnapCats() {
+  const el = $('snapCats');
+  if (!el) return;
+  el.style.display = 'none';
+  el.innerHTML = '';
+}
+
 function renderCourseHint(text, kind) {
   const el = $('courseHint');
   if (!el) return;
@@ -1359,18 +1429,29 @@ function resetFilters() {
   updateFilterHint();
 }
 
-/* 加载离线课程数据。⚠️ 加载出来的**只能看、不能选班** ——
-   `/api/classes` 在未开放期同样被闸门挡下（教学班数据没落盘）。
-   这一点必须说清楚，否则用户点了「选班」以为坏了。 */
-async function loadCoursesSnapshot() {
+/* 加载离线课程数据。
+
+   `forceKey` = 用户点了「快照类别」条上某一类（`kklxdm|kklxmc`）——
+   走精确匹配，不做任何回退（点「大英一」就必须是大英一，两个板块课 kklxdm 都是 06）。
+   不传 = 从「📂 上次数据」按钮进来：先按当前类别找，找不到再自动换最近有数据的那一类。
+
+   加载出来后：
+     · 设好 `S.snapBucket`（执行路径靠它拿 tab_index/kklxdm，见上面的说明）；
+     · 画出「快照类别」条 → **离线也能切类别**（这就是 2026-10-12 用户报的 bug）。 */
+async function loadCoursesSnapshot(forceKey) {
   const btn = $('btnCoursesSnap');
   if (btn) btn.disabled = true;
   try {
     const t = currentTab();
-    const q = '?kklxdm=' + encodeURIComponent((t && t.kklxdm) || '')
-      + '&kklxmc=' + encodeURIComponent((t && t.name) || '');
-    let r = await api('GET', '/api/courses/snapshot/load' + q);
+    let r;
     let autoNote = '';
+    if (forceKey) {
+      r = await api('GET', '/api/courses/snapshot/load?key=' + encodeURIComponent(forceKey));
+    } else {
+      const q = '?kklxdm=' + encodeURIComponent((t && t.kklxdm) || '')
+        + '&kklxmc=' + encodeURIComponent((t && t.name) || '');
+      r = await api('GET', '/api/courses/snapshot/load' + q);
+    }
     if (!r.ok) {
       // ⚠️ 当前类别上次没存过。**必须自动换一个有数据的类别** ——
       // 按钮的悬停说明就是这么承诺的，而且「点了什么都不发生」是最差的体验
@@ -1387,9 +1468,8 @@ async function loadCoursesSnapshot() {
         ? `（当前类别上次没保存过，已改用「${pick.kklxmc || pick.kklxdm}」）`
         : `（课程类别下拉是空的：未开放期建立会话拿不到 Tab；已改用「${pick.kklxmc || pick.kklxdm}」）`;
       if (btn) btn.textContent = '加载中…';
-      r = await api('GET', '/api/courses/snapshot/load'
-        + '?kklxdm=' + encodeURIComponent(pick.kklxdm || '')
-        + '&kklxmc=' + encodeURIComponent(pick.kklxmc || ''));
+      // 用 key 精确取 —— 只给 kklxdm 的话，「板块课」这两桶（都是 06）会取错
+      r = await api('GET', '/api/courses/snapshot/load?key=' + encodeURIComponent(pick.key || ''));
       if (!r.ok) {
         logLine((r.reason || '加载课程数据失败') + autoNote, 'warn');
         return;
@@ -1412,12 +1492,25 @@ async function loadCoursesSnapshot() {
     let switched = '';
     if (canSwitch && b.tab_index !== currentTabIndex()) {
       $('tabSel').value = want;
+      // ⚠️ 顺序要害：onTabChange() 会 clearSnapCtx()，所以「设 S.snapBucket」
+      //    必须排在它**后面**，否则刚设好就被自己清掉了。
       onTabChange();
       switched = `（已自动切到「${b.kklxmc || b.kklxdm}」）`;
     } else if (!canSwitch) {
-      switched = '（课程类别下拉是空的：未开放期建立会话拿不到 Tab，'
-        + '所以只是把这份数据按保存时的类别列出来，没有切类别）';
+      switched = '（课程类别下拉是空的：未开放期建立会话拿不到 Tab；'
+        + '改用下面的「快照类别」条来切换看哪一类）';
     }
+    // ⭐ 记住「现在看的是哪一桶」—— 离线选班/加清单要靠它的 tab_index。
+    //    groupByCourse 之前设好，后面 renderCourses → expandClasses 立刻就要用。
+    S.snapBucket = {
+      key: b.key || '',
+      kklxdm: b.kklxdm || '',
+      kklxmc: b.kklxmc || '',
+      tab_index: (typeof b.tab_index === 'number') ? b.tab_index : -1,
+      saved_at: b.saved_at || 0,
+    };
+    // 离线类别切换条：列出所有桶，当前那一个高亮
+    renderSnapCats(r.available || [], b.key);
     S.courses = groupByCourse(r.rows || []);
     renderCourses(S.courses);
     const when = b.saved_at
@@ -1428,11 +1521,20 @@ async function loadCoursesSnapshot() {
     const why = (S.isOpen === false)
       ? '教务当前未开放，查不到课 —— 这份就是这时用来代替「搜索」的。'
       : '等教务未开放、搜不到课时，这个按钮就是「搜索」的替代品。';
+    // 教学班数据的落盘情况：直接说清楚「哪些课离线还能选班」，别让用户点了才知道
+    const cs = S.classesSnap;
+    const clsTip = (cs && cs.count)
+      ? `「选班」离线也能用：展开时若教务查不到，会自动改用上次保存的教学班数据`
+        + `（已保存 ${cs.count} 门课）。`
+        + '<br>⚠️ 离线加入清单后，提交用的令牌会在**开始抢课时**由程序重新获取 —— '
+        + '不会用上次那个已经作废的。'
+      : '「选班」需要教务开放后才能用（还没有保存过任何教学班数据）。';
     renderCourseHint(
       `📂 这是**上次搜索保存下来的**课程数据（类别「${esc(b.kklxmc || b.kklxdm)}」，保存在 ${esc(when)}）。`
-      + (autoNote ? esc(autoNote) + '<br>' : '')
-      + esc(why)
-      + '<br>⚠️ 「选班」需要教务开放后才能用（教学班数据没有落盘）。'
+      + '<br>用上面的「快照类别」条可以切换到**别的类别**看（离线时课程类别下拉是空的）。'
+      + (autoNote ? '<br>' + esc(autoNote) : '')
+      + '<br>' + esc(why)
+      + '<br>' + clsTip
       + (S.isOpen === true ? '<br>现在是开放期 —— 点「搜索」拿到的才是实时数据。' : ''),
       S.isOpen === false ? 'warn' : 'info');
   } catch (e) {
@@ -1443,7 +1545,9 @@ async function loadCoursesSnapshot() {
   }
 }
 
-$('btnCoursesSnap').onclick = loadCoursesSnapshot;
+// ⚠️ 必须包一层：onclick 会把 MouseEvent 当第 1 个实参传进去，
+//    直接挂 loadCoursesSnapshot 的话 `forceKey` 会变成事件对象（恒真）→ 走错分支。
+$('btnCoursesSnap').onclick = () => loadCoursesSnapshot();
 
 $('btnSearch').onclick = async () => {
   const kw = $('kw').value.trim();
@@ -1460,6 +1564,7 @@ $('btnSearch').onclick = async () => {
     S.courses = groupByCourse(r.rows || []);
     renderCourses(S.courses);
     renderCourseHint('');           // 实时数据 → 清掉「这是离线数据」的提示
+    clearSnapCtx();                 // 同样清掉离线上下文 + 「快照类别」条
     const t = currentTab();
     // 结果标题：有筛选时把条件带出来，让用户知道「现在的列表是被筛过的」。
     // ⚠️ 标题栏左边已经是「搜索课程」，这里只放筛选说明（不再重复「搜索结果」四个字）。
@@ -1876,14 +1981,28 @@ function markOf(key) {
 }
 
 /* 这门课的这个教学班是不是已经在抢课清单里了（决定按钮显示「+ 加入」还是「✓ 已加入」）。
-   do_id 优先；没解析出 do_id 的只能退回按课程号比。 */
+
+   ⭐ **优先按 `jxb_id`（教学班的稳定 id）比**，比不出来才退回 `do_id`。
+   为什么必须这样（2026-10-12 加落盘教学班时发现，对实时数据也成立）：
+     `do_id` 是**每次查询都重新下发的一次性令牌**（铁律 #5）。清单里存的是
+     「加入那一刻」的令牌，而列表里的是「刚才那次查询」的令牌 —— 两者天然不同。
+     只按 do_id 比，就会出现「明明已经加进清单了，按钮还是『+ 加入』」，
+     用户再点一次反而是把它**移除**（按钮是切换语义）→ 实打实的界面撒谎。
+     离线数据更极端：后端已把 do_id 清空（根本不该拿作废令牌去比）。
+   退路保持原样：能比 do_id 就比 do_id，都没有才退回按课程号（铁律 #6 保证一门课只押一个班）。 */
 function isInPlan(jxb, kch) {
-  return S.plan.some((p) => (jxb.do_id ? p.do_id === jxb.do_id : (!p.do_id && p.kch_id === kch)));
+  return S.plan.some((p) => {
+    if (p.jxb_id && jxb.jxb_id) return p.jxb_id === jxb.jxb_id;
+    return jxb.do_id ? p.do_id === jxb.do_id : (!p.do_id && p.kch_id === kch);
+  });
 }
 
-/* 这个教学班是不是已经在蹲课清单里了（决定「+ 蹲」还是「✓ 已蹲」）。 */
+/* 这个教学班是不是已经在蹲课清单里了（决定「+ 蹲」还是「✓ 已蹲」）。判据同上。 */
 function isInWait(jxb, kch) {
-  return S.wait.some((p) => (jxb.do_id ? p.do_id === jxb.do_id : (!p.do_id && p.kch_id === kch)));
+  return S.wait.some((p) => {
+    if (p.jxb_id && jxb.jxb_id) return p.jxb_id === jxb.jxb_id;
+    return jxb.do_id ? p.do_id === jxb.do_id : (!p.do_id && p.kch_id === kch);
+  });
 }
 
 /* 把同一天的时段整理成「课表格子」。
@@ -2426,14 +2545,39 @@ async function expandClasses(i, btn) {
   }
   btn.disabled = true; btn.textContent = '加载中…';
   try {
-    // 必须带上 tab_index —— 教学班的可查性依赖对应类别的上下文
-    const res = await api('GET', '/api/classes?kch_id=' + encodeURIComponent(kch)
-                          + '&tab_index=' + currentTabIndex());
+    // 必须带上 tab_index —— 教学班的可查性依赖对应类别的上下文。
+    // ⚠️ 用 `ctxTabIndex()` 而不是 `currentTabIndex()`：离线看落盘课程时下拉是空的
+    //    （恒 -1），真实下标得从 `S.snapBucket` 取，否则「大英一」会被解析到
+    //    「大学体育」板块（两个板块课的 kklxdm 都是 06）。
+    // kch/kcmc 只用于**落盘时给这份教学班数据留个可读的抬头**，不参与查询。
+    let res;
+    try {
+      res = await api('GET', '/api/classes?kch_id=' + encodeURIComponent(kch)
+                      + '&tab_index=' + ctxTabIndex()
+                      + '&kklxdm=' + encodeURIComponent(r.kklxdm || '')
+                      + '&kch=' + encodeURIComponent(r.kch || '')
+                      + '&kcmc=' + encodeURIComponent(r.kcmc || ''));
+    } catch (e) {
+      // ⭐ 实时查不到 → 回落到**上次保存的教学班数据**（2026-10-12 新增落盘才可能）。
+      //    未开放期 `/api/classes` 会被本地闸门直接挡下（连请求都不发），
+      //    这条回退就是「离线也能选班」的全部实现。
+      // ⚠️ 先试实时、再退离线，顺序不能反：开放期教务给的是**最新**的余量，
+      //    落盘那份只会更旧（可能上次还有名额、这次满了）。
+      const snap = await api('GET', '/api/classes/snapshot/load?kch_id=' + encodeURIComponent(kch));
+      if (!snap.ok) throw e;   // 落盘里也没有 → 把**实时那个**错误抛出去（别用兜底文案盖住真因）
+      res = snap;
+      logLine(`教务查不到「${r.kcmc || kch}」的教学班（${e.message}）`
+        + '→ 改用上次保存的教学班数据', 'warn');
+    }
     const items = res.items || [];
+    // `entry` 只有「走落盘那条路」才会有 → 拿它当「这是离线数据」的判据
+    const off = res.entry || null;
     if (!items.length) {
-      box.innerHTML = '<div class="muted" style="margin-top:6px">无可用教学班（可能未开放）</div>';
+      box.innerHTML = off
+        ? '<div class="muted" style="margin-top:6px">上次保存的教学班数据是空的</div>'
+        : '<div class="muted" style="margin-top:6px">无可用教学班（可能未开放）</div>';
     } else {
-      const ex = { i, kch, items, box };
+      const ex = { i, kch, items, box, off };
       S.expanded.set(box.id, ex);
       if (!S.selectedLoaded) {
         // 没已选数据就判不了冲突 —— 顺手补一次（这是用户主动展开，不是轮询）
@@ -2458,7 +2602,7 @@ async function expandClasses(i, btn) {
 }
 
 function renderClassRows(ex) {
-  const { i, kch, items, box } = ex;
+  const { i, kch, items, box, off } = ex;
   const free = items.filter((j) => !j.is_full).length;
   const added = items.filter((j) => isInPlan(j, kch)).length;
   const head = `共 ${items.length} 个教学班，${free} 个未满`
@@ -2466,8 +2610,19 @@ function renderClassRows(ex) {
     + (S.conflictsKnown
         ? ' · 冲突不拦，仅提示'
         : ' · <span style="color:var(--amber)">已选课表未加载，冲突无法判定</span>');
+  // 离线数据的「丑话说在前面」：这是**上次**看到的余量，不是现在的。
+  // 不写清楚的话，用户会以为「上次还有名额」= 现在也有。
+  const offWhen = off && off.saved_at
+    ? new Date(off.saved_at * 1000).toLocaleString('zh-CN', { hour12: false }) : '时间未知';
+  const offTip = off
+    ? `<div class="note warn" style="margin:6px 0 0;padding:6px 9px">`
+      + `📂 <b>离线数据</b>（保存于 ${esc(offWhen)}）—— 教务当前查不到教学班，`
+      + `这是上次展开时存下来的，<b>余量可能已经变了</b>。`
+      + `「+ 加入清单」照常可用；提交用的令牌会在<b>开始抢课时</b>由程序重新获取（现在这个已作废、不带）。`
+      + `</div>`
+    : '';
 
-  box.innerHTML = `<div class="muted" style="margin-top:6px">${head}</div>` +
+  box.innerHTML = offTip + `<div class="muted" style="margin-top:6px">${head}</div>` +
     items.map((j, k) => {
       const key = j.do_id || `${kch}-${k}`;
       const mark = markOf(key);
@@ -2552,8 +2707,9 @@ function renderClassRows(ex) {
       const j = items[parseInt(b2.dataset.wk, 10)];
       if (!j) return;
       if (isInWait(j, kch)) {
-        // 蹲课允许同课不同班 → 用 do_id 精确删这一个班，别用 kch_id（会误删同课其他班）。
-        removeFromWait(j.do_id || kch, (S.courses[i] || {}).kcmc || kch);
+        // 蹲课允许同课不同班 → 精确删这一个班，别用 kch_id（会误删同课其他班）。
+        // `jxb_id` 是兜底：离线数据不带 do_id（后端已清空），只能靠稳定 id 认回。
+        removeFromWait(j.do_id || j.jxb_id || kch, (S.courses[i] || {}).kcmc || kch);
       } else {
         addToWait(S.courses[i], j);
       }
@@ -2680,6 +2836,7 @@ async function refreshPlanConflicts() {
 function addToPlan(course, jxb) {
   const kch = course.kch_id || course.kch || '';
   const t = currentTab();
+  const ob = S.snapBucket;      // 非空 = 现在看的是**落盘数据**（未开放期）
   const key = jxb.do_id || kch;
   const lv = levelOf(key);
   const info = S.conflicts[key];
@@ -2693,10 +2850,11 @@ function addToPlan(course, jxb) {
     // 抢课过程中令牌过期要「重新绑定同一个班」，只能靠 jxb_id 认回它 ——
     // 少了这个，刷新时就可能顺手换到别的班，等于擅自改了用户的选择。
     jxb_id: jxb.jxb_id || '',
-    kklxdm: course.kklxdm || (t ? t.kklxdm : ''),
-    // 板块下标。必须带：kklxdm 会重复（两个板块课都是 06），
-    // 只存 kklxdm 的话加「大英一」的课会查到「大学体育」板块去。
-    tab_index: currentTabIndex(),
+    // ⭐ 类别代码 / 板块下标。两者都必须带：kklxdm 会重复（两个板块课都是 06），
+    //    只存 kklxdm 的话加「大英一」的课会查到「大学体育」板块去。
+    //    离线（看落盘数据）时下拉是空的 → 只能取快照桶里的，见 ctxTabIndex()。
+    kklxdm: course.kklxdm || (ob ? ob.kklxdm : (t ? t.kklxdm : '')),
+    tab_index: ctxTabIndex(),
     kcmc: course.kcmc || '(未命名)',
     jsxx: jxb.teacher_text || jxb.jsxx || '',
     jxbmc: jxb.kcmc || '',
@@ -2720,6 +2878,12 @@ function addToPlan(course, jxb) {
     logLine(`⚠ 已加入（节次重叠、周次错开）：${course.kcmc || kch}（${timeTip}）${why}`, 'warn');
   } else {
     logLine(`已加入清单：${course.kcmc || kch}（${timeTip}）`, 'ok');
+  }
+  // 离线加入必须**主动交代**「这不是实时数据、令牌也还没拿到」——
+  // 界面不能因为点了有反应就让用户以为已经万事俱备。
+  if (ob) {
+    logLine('   ⓘ 这一项是**离线数据**里加的（教务当前查不到课）。'
+      + '提交用的令牌会在「开始」时由程序按教学班重新获取，不影响到时候抢课。', 'info');
   }
 
   // 清单变了 → 其他候选的冲突结论也跟着变，全部重算
@@ -3162,8 +3326,10 @@ function removeFromWait(kch, label) {
   const before = S.wait.length;
   // ⚠️ 蹲课允许同课不同班，所以**不能按 kch_id 移除**（那会一次删掉同课所有班）。
   //   这里 `kch` 参数实际可能传的是 do_id（见 renderClassRows 的 data-wk 点击），
-  //   优先按 do_id 匹配；否则按 kch_id 匹配（但只删第一项，保留同课其他班）。
+  //   优先按 do_id 匹配；再退到 **jxb_id**（稳定 id —— 离线数据的 do_id 是空的，
+  //   只能靠它认回原来那个班）；最后才按 kch_id 匹配（且只删第一项，保留同课其他班）。
   let idx = S.wait.findIndex((p) => p.do_id && p.do_id === kch);
+  if (idx < 0) idx = S.wait.findIndex((p) => p.jxb_id && p.jxb_id === kch);
   if (idx < 0) idx = S.wait.findIndex((p) => p.kch_id === kch);
   if (idx < 0) return false;
   S.wait.splice(idx, 1);
@@ -3227,8 +3393,9 @@ function addToWait(course, jxb) {
     kch_id: kch,
     do_id: jxb.do_id || '',
     jxb_id: jxb.jxb_id || '',
-    kklxdm: course.kklxdm || '',
-    tab_index: currentTabIndex(),
+    kklxdm: course.kklxdm || (S.snapBucket ? S.snapBucket.kklxdm : ''),
+    // 同抢课清单：离线时下拉是空的，板块下标只能取快照桶里的（kklxdm 会重复）
+    tab_index: ctxTabIndex(),
     kcmc: course.kcmc || '(未命名)',
     jsxx: jxb.teacher_text || jxb.jsxx || '',
     jxbmc: jxb.kcmc || '',

@@ -593,6 +593,31 @@ button.tiny { padding: 3px 8px; font-size: 12px; }
 .note.info { background: var(--accent-weak); border-color: #c9dbfb; color: #1d4fa8; }
 .note code { font-family: var(--mono); background: rgba(0,0,0,.05); padding: 1px 4px; border-radius: 3px; }
 
+/* ---------- 「快照类别」条（落盘课程的离线类别切换）----------
+   ⭐ 上面那个「课程类别」下拉是**执行**用的（value = S.tabs 下标），未开放期是空的；
+   离线看落盘数据时的类别切换只能另做一条，就是这个。 */
+.snapcats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 7px 9px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.snapcats > .muted { margin-right: 2px; }
+/* 当前正在看的那一类：高亮 + 不可点（再点一次没有意义，还会让列表闪一下） */
+.snapcats button.tiny.cur {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  opacity: 1;
+}
+.snapcats button.tiny.cur:disabled { opacity: 1; cursor: default; }
+.snapcats button.tiny { padding: 3px 9px; }
+
 /* 骨架 */
 .muted { color: var(--text-3); font-size: 12px; }
 .hidden { display: none !important; }

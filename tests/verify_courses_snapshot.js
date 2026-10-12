@@ -119,6 +119,12 @@ const PROBE = `(() => {
     inHeaderOfCard: !!(hdr && hdr.tagName === 'HEADER'
                        && card && card.tagName === 'SECTION' && card.classList.contains('card')),
     headerText: title,
+    // ⭐ 判据不写死步骤序号：这张卡在 2026-10-01 的布局改造里从「2 搜索课程」
+    //    变成了「3 搜索课程」（左边多了一张「筛选课程」卡）。历史断言写死 /2 搜索课程/
+    //    → 布局没坏、功能没坏，测试却一直红。改成结构化判定：**卡片里装的就是搜索框**
+    //    （#kw / #btnSearch），不管它编号几，都能证明「按钮挂在搜索课程这张卡上」。
+    cardHasSearch: !!(card && card.querySelector && card.querySelector('#kw, #btnSearch')),
+    stepNo: (() => { const s = hdr && hdr.querySelector('.step'); return s ? s.textContent.trim() : ''; })(),
     isLastInHeader: hdr ? hdr.lastElementChild === b : false,
     sharesRowWithSearch: !!(hdr && hdr.querySelector && hdr.querySelector('#btnSearch')),
     rightGap: Math.round(hr.right - br.right),
@@ -189,16 +195,21 @@ const PROBE = `(() => {
     const st0 = JSON.parse((await urlReq(`${BASE}/api/state`)).body);
     console.log(`   服务端视角：session_state=${st0.session_state} inited=${st0.inited} is_open=${st0.is_open}`);
 
-    // ---- ① 未开放期 → 按钮在「2 搜索课程」标题栏右侧 ----
-    console.log('\n① 未开放期：「📂 上次数据」在「2 搜索课程」标题栏右侧');
+    // ---- ① 未开放期 → 按钮在「搜索课程」标题栏右侧 ----
+    console.log('\n① 未开放期：「📂 上次数据」在「搜索课程」标题栏右侧');
     const info = await waitShown(true);
     console.log(`   #btnCoursesSnap = ${info && info.text}   (parent=${info && info.parentTag}`
-      + `, headerText=「${info && info.headerText}」, 距右边缘 ${info && info.rightGap}px)`);
+      + `, headerText=「${info && info.headerText}」(step ${info && info.stepNo})`
+      + `, 距右边缘 ${info && info.rightGap}px)`);
     check('⭐ 按钮出现了（未开放期）', !!(info && info.shown), JSON.stringify(info));
     check('⭐ 它的父节点是 <header>（不是搜索输入框那一行）',
       !!(info && info.inHeaderOfCard), JSON.stringify(info));
-    check('⭐ 而且就是「2 搜索课程」这张卡片的标题栏',
-      !!(info && /2\s*搜索课程/.test(info.headerText || '')), info && info.headerText);
+    // ⚠️ 这里**故意不写死「2 搜索课程」**：卡片序号随布局改过（现为第 3 张），
+    //    写死序号会让「功能好端端的」测试一直报红（本脚本已经踩过这个坑）。
+    //    判据改成结构性的：这张卡的 card 里就装着搜索框（#kw / #btnSearch）。
+    check('⭐ 而且就是「搜索课程」这张卡片的标题栏（卡片里装着搜索框）',
+      !!(info && info.cardHasSearch),
+      `cardHasSearch=${info && info.cardHasSearch}｜headerText=「${info && info.headerText}」`);
     check('⭐ 在标题栏里排**最后**（即标题文字右侧）',
       !!(info && info.isLastInHeader), JSON.stringify(info));
     check('⭐ 贴住标题栏右边缘（≤24px = 16px 内边距 + 余量）',
@@ -248,8 +259,11 @@ const PROBE = `(() => {
       n <= Number(newest.count || 0), `门数 ${n} / 教学班 ${newest.count}`);
     check('⭐ 明确标注「这是上次保存下来的」（不能让人误以为是实时数据）',
       hint.includes('上次搜索保存下来的'), hint.slice(0, 120));
-    check('⭐ 且说清了「选班」现在能不能用（教学班数据没落盘）',
-      hint.includes('选班'), hint.slice(0, 200));
+    // 2026-10-12 起教学班数据也会落盘了，所以提示条不再说「用不了」，
+    // 而是**按这门课有没有落过教学班**分两种情况说明（有 → 离线也能选班；
+    // 没有 → 要等教务开放）。这里只要求「选班」二字出现且交代了能否用。
+    check('⭐ 且说清了「选班」现在能不能用（有没有落过教学班数据）',
+      hint.includes('选班') && /离线也能用|开放后才能用/.test(hint), hint.slice(0, 240));
     check('日志说明了来源与保存时间',
       typeof logs === 'string' && logs.includes('已加载上次搜索的课程数据')
       && /保存于/.test(logs), String(logs).slice(-200));

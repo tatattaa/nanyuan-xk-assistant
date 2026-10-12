@@ -74,6 +74,9 @@ _PLAN_FILE = "plan.json"
 _WAIT_FILE = "wait.json"
 #: 课程数据快照（「上次搜到的课程」）。与清单分开存，见下面的说明。
 _COURSES_FILE = "courses.json"
+#: 教学班数据快照（「上次展开过的教学班」）。2026-10-12 用户要求新增。
+#: 与课程快照分开第三个文件 —— 理由见下面「教学班数据落盘」那一节。
+_CLASSES_FILE = "classes.json"
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 #: 「磁盘快照元信息」的缓存时长（秒）。见 `Runtime.snapshot_meta`。
@@ -390,6 +393,187 @@ def clear_courses_snapshot() -> bool:
             return False
 
 
+# ---------------------------------------------------------------------------
+# 教学班数据落盘（「上次展开过的教学班」）
+#
+# 2026-10-12 用户要求：「将教学班数据落盘」。
+#
+# 用途：未开放期 `/api/classes` 会被本地闸门挡下（教务这时只会回框架页），
+#   而「上次开放期展开过的教学班」还躺在磁盘上 —— 拿出来就能看「那门课有几个班、
+#   哪个没满、谁教、什么时候上」，也正是「离线也能挑班加清单」的前提。
+#
+# 🔴 为什么**另开一个文件**而不是塞进 courses.json 的桶里：
+#   ① 两者写入时机完全不同 —— 课程是「一次搜索写一整桶」，教学班是「展开一门课
+#      写那一条」。塞在一起会让每次展开某门课都要读-改-写那份几百 KB 的课程文件。
+#   ② `courses.json` 的「带筛选就不写」等语义是刻意设计的（见 app.py 里的长注释），
+#      混进第二种写者后，「这桶到底是谁写的、什么时候写的」就说不清了。
+#   ③ 分开后任一文件损坏都不牵连另一个，排查时也各自独立。
+#
+# key 用 `kch_id`（课程号）—— `/api/classes` 就是按它查的，天然一一对应。
+# ⚠️ 同一门课在不同类别下**不会**有不同的教学班，所以不需要像课程那样按类别分桶；
+#    但每条里仍然记下 `kklxdm`/`tab_index`，因为「离线把某个班加进清单」时
+#    运行时要用它定位板块（两个「板块课」的 kklxdm 都是 06，只靠 kklxdm 会跑偏）。
+# ---------------------------------------------------------------------------
+
+#: 最多保留多少门课的教学班数据（超出按 saved_at 丢最旧的）。
+#: 每门课约 1~3 KB，200 门 ≈ 400 KB 上限，与 courses.json 一个量级。
+CLASSES_MAX_COURSES = 200
+
+#: 单门课最多存几个教学班（正常一门课十几个班；加上限防异常数据把文件撑爆）。
+CLASSES_MAX_ITEMS = 60
+
+_CLASSES_LOCK = threading.Lock()
+
+
+def classes_path() -> Path | None:
+    """教学班数据快照文件的完整路径；关闭落盘时为 None。"""
+    return None if STATE_DIR is None else STATE_DIR / _CLASSES_FILE
+
+
+def read_classes_snapshot() -> dict:
+    """把教学班快照文件整个读出来（`{"version", "courses", "saved_at"}`）。
+
+    任何异常都当「没有快照」—— 读不出来只是少了个便利，不该让功能挂掉。
+    """
+    p = classes_path()
+    if p is None or not p.exists():
+        return {}
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict) or not isinstance(raw.get("courses"), dict):
+            raise ValueError("结构不对")
+        return raw
+    except Exception as e:
+        logger.warning("教学班快照读取失败，按「没有快照」处理：%s", e)
+        return {}
+
+
+def save_classes_snapshot(
+    *,
+    kch_id: str,
+    kch: str = "",
+    kcmc: str = "",
+    kklxdm: str = "",
+    kklxmc: str = "",
+    tab_index: int = -1,
+    items: list,
+    semester: str = "",
+) -> bool:
+    """把**一次教学班查询**的结果存进它那门课的条目（旧内容被覆盖）。
+
+    ⚠️ 只在 items 非空时调用：一次失败的 / 空的查询绝不能把已有的好数据冲掉
+    （未开放期根本查不到，被空结果覆盖就**永久**丢了）。
+
+    读-改-写整个文件 → 用模块级锁串起来（并发展开多门课时不会互相丢条目）。
+    写盘仍是「先写 .tmp 再 os.replace」的原子替换。
+    """
+    p = classes_path()
+    kch_id = (kch_id or "").strip()
+    if p is None or not kch_id or not items:
+        return False
+    items = items[:CLASSES_MAX_ITEMS]
+    entry = {
+        "kch_id": kch_id,
+        "kch": kch or "",
+        "kcmc": kcmc or "",
+        "kklxdm": kklxdm or "",
+        "kklxmc": kklxmc or "",
+        # Tab 下标：离线加清单时靠它定位板块（kklxdm 会重复，见上面的说明）
+        "tab_index": tab_index,
+        "saved_at": time.time(),
+        "semester": semester or "",
+        "count": len(items),
+        "items": items,
+    }
+    try:
+        with _CLASSES_LOCK:
+            doc = read_classes_snapshot()
+            courses: dict = dict(doc.get("courses") or {})
+            courses[kch_id] = entry
+            # 条目太多就丢掉最旧的（按 saved_at），别让文件无限长大
+            if len(courses) > CLASSES_MAX_COURSES:
+                keep = sorted(
+                    courses.items(), key=lambda kv: kv[1].get("saved_at") or 0, reverse=True
+                )[:CLASSES_MAX_COURSES]
+                courses = dict(keep)
+            out = {
+                "version": 1,
+                "saved_at": max(c.get("saved_at") or 0 for c in courses.values()),
+                "courses": courses,
+            }
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, p)
+        logger.info(
+            "教学班数据已落盘：%s（%s）共 %d 个班",
+            kch_id, kcmc or kch or "-", len(items),
+        )
+        return True
+    except Exception as e:
+        logger.warning("教学班数据落盘失败（不影响本次查询）：%s", e)
+        return False
+
+
+def load_classes_snapshot(kch_id: str) -> dict:
+    """按课程号取出那门课的教学班条目（含 items）。取不到返回 {}。"""
+    kch_id = (kch_id or "").strip()
+    if not kch_id:
+        return {}
+    entry = (read_classes_snapshot().get("courses") or {}).get(kch_id)
+    return entry if isinstance(entry, dict) else {}
+
+
+def classes_snapshot_summary() -> dict:
+    """教学班快照的**摘要**（不含 items，给界面用）。
+
+    返回 `{}` = 没有快照。否则：
+      exists / path / saved_at / total / count / courses[{kch_id,kch,kcmc,kklxdm,
+      kklxmc,tab_index,count,saved_at,semester}]
+    """
+    doc = read_classes_snapshot()
+    courses = doc.get("courses") or {}
+    if not courses:
+        return {}
+    items = []
+    for kch_id, c in courses.items():
+        items.append({
+            "kch_id": kch_id,
+            "kch": c.get("kch") or "",
+            "kcmc": c.get("kcmc") or "",
+            "kklxdm": c.get("kklxdm") or "",
+            "kklxmc": c.get("kklxmc") or "",
+            "tab_index": c.get("tab_index", -1),
+            "count": len(c.get("items") or []),
+            "saved_at": c.get("saved_at"),
+            "semester": c.get("semester") or "",
+        })
+    items.sort(key=lambda x: x.get("saved_at") or 0, reverse=True)
+    return {
+        "exists": True,
+        "path": str(classes_path()),
+        "saved_at": doc.get("saved_at"),
+        "count": len(items),
+        "total": sum(i["count"] for i in items),
+        "courses": items,
+    }
+
+
+def clear_classes_snapshot() -> bool:
+    """删掉教学班快照文件（换学期作废时用）。"""
+    p = classes_path()
+    if p is None:
+        return False
+    with _CLASSES_LOCK:
+        try:
+            if p.exists():
+                p.unlink()
+            return True
+        except Exception as e:
+            logger.warning("教学班快照删除失败：%s", e)
+            return False
+
+
 def _save_plan_to(path: Path | None, plan: Plan | None, *, semester: str = "") -> bool:
     """把清单写进指定文件（原子覆盖）。`plan is None` 或空则删文件。
 
@@ -532,6 +716,7 @@ class Runtime:
         self._snap_cache: tuple[float, dict] = (0.0, {})
         # 「上次搜到的课程」摘要的小缓存，理由同上
         self._courses_cache: tuple[float, dict] = (0.0, {})
+        self._classes_cache: tuple[float, dict] = (0.0, {})
         self._events: deque[Event] = deque(maxlen=EVENT_BUFFER)
         self._seq = 0  # 事件序号，供前端增量拉取
 
@@ -775,6 +960,28 @@ class Runtime:
             self._courses_cache = (0.0, {})
 
     @property
+    def classes_snapshot(self) -> dict:
+        """**磁盘上**「上次展开过的教学班」的摘要（只读，不含 items）。
+
+        与 `courses_snapshot` 同一套路：不随内存状态清空，带 2 秒 TTL 缓存
+        （`/api/state` 是 3 秒轮询）。
+        """
+        with self._lock:
+            now = time.monotonic()
+            ts, cached = self._classes_cache
+        if now - ts < _SNAPSHOT_CACHE_S:
+            return dict(cached)
+        val = classes_snapshot_summary()
+        with self._lock:
+            self._classes_cache = (now, val)
+        return dict(val)
+
+    def invalidate_classes_cache(self) -> None:
+        """刚写过教学班快照 → 摘要缓存作废。"""
+        with self._lock:
+            self._classes_cache = (0.0, {})
+
+    @property
     def plan_rev(self) -> int:
         """当前清单版本号（乐观锁）。前端每次 `/api/state` 都会拿到它。"""
         with self._lock:
@@ -895,10 +1102,13 @@ class Runtime:
         而且还会把「已解析的教学班」这种假象带进界面。宁可在建会话时就明确作废、
         并且**告诉用户**（推一条日志事件），也不要留一份看起来完好的废数据。
 
-        ⚠️ 对账对象有**三个**，而且**各自独立判断**（别指望一个分支清掉全部）：
+        ⚠️ 对账对象有**四个**，而且**各自独立判断**（别指望一个分支清掉全部）：
           1. 内存里那份清单（用户正在用的）—— 对它的 `_plan_meta.semester`；
           2. **磁盘上的清单快照**（还没被加载的那份）—— 对文件里记的 `semester`；
-          3. **磁盘上的课程数据**（「上次搜到的课程」）—— 对每个桶自己的 `semester`。
+          3. **磁盘上的课程数据**（「上次搜到的课程」）—— 对每个桶自己的 `semester`；
+          4. **磁盘上的教学班数据**（2026-10-12 新增）—— 同 ③，对每条自己的 `semester`。
+             必须跟 ③ 同进同退：教学班里带着 `kklxdm`/`tab_index`，那是**上学期**的
+             Tab 布局，留着它会让离线「选班」加进来的项在开抢时定位到错板块。
         ② 必须查：否则用户点「加载上次数据」会拿到一份上一学期的废清单。
         ③ 更要独立查：用户完全可能**只搜过课、一门清单都没建** ——
         那种情况下 ①② 的 `stored` 是空的，若把清课程数据挂在清单那个分支里，
@@ -945,6 +1155,19 @@ class Runtime:
                     clear_courses_snapshot()
                     self._courses_cache = (0.0, {})
                     dropped.append(f"本地保存的课程数据（{snap_semester_text(sems)}）")
+
+            # ---- ④ 教学班数据（同上，独立判断）----
+            # ⚠️ 必须跟课程数据**同进同退**：教学班里带着 kklxdm / tab_index，
+            #    那是**上学期**的 Tab 布局；留着它，未开放期展开出来的班会被
+            #    当成本学期的，加进清单后运行时定位到错板块（两个板块课都是 06）。
+            ksnap = classes_snapshot_summary()
+            if ksnap:
+                sems = {c.get("semester") for c in ksnap.get("courses") or []}
+                sems.discard("")
+                if sems and current not in sems:
+                    clear_classes_snapshot()
+                    self._classes_cache = (0.0, {})
+                    dropped.append(f"本地保存的教学班数据（{snap_semester_text(sems)}）")
 
         if not dropped:
             return {"dropped": False, "from": stored, "to": current}
@@ -1330,6 +1553,9 @@ class Runtime:
                 # 未开放期教务查不了课，界面靠它给出「📂 上次数据」按钮，
                 # 点一下就把对应类别的离线课程列表拉出来看。
                 "courses_snapshot": self.courses_snapshot,
+                # 教学班落盘摘要（「上次展开过的教学班」），2026-10-12 新增。
+                # 前端据它显示「📂 离线教学班（N 门）」，并在未开放期让「选班」可用。
+                "classes_snapshot": self.classes_snapshot,
                 "clock": clock,
                 # 本学期学分要求（最低/最高/已选）+ 清单待加选学分。
                 # 「已选 + 待选 > 最高」就是教务驳回的头号原因，所以提前摆出来。
