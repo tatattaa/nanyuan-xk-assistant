@@ -175,48 +175,91 @@ def _try_acquire_single_instance(port: int) -> bool:
     return True
 
 
+#: 第二个实例的托盘提示最多等多久（秒）—— 用户不理它就别在托盘里留个没人管的图标。
+_ALREADY_RUNNING_TRAY_TIMEOUT_S = 30.0
+
+
+def _open_url(url: str) -> None:
+    """尽力打开浏览器；失败不抛（打不开页面不该让程序崩）。"""
+    try:
+        import webbrowser
+
+        webbrowser.open(url)
+    except Exception:
+        pass
+
+
 def _notify_already_running(port: int, *, open_page: bool) -> None:
-    """第二次启动：把「已经在跑了」讲清楚，并把那个页面带出来。"""
+    """第二次启动：**托盘气泡**提示「已经在跑了」，单击托盘图标就把页面带出来。
+
+    ⚠️ 为什么不用 MessageBox（2026-10-12 用户要求改掉）：模态框会**打断**用户 ——
+       他只是想再打开一次页面，却得先点掉一个对话框。
+    ⚠️ 为什么是「单击**托盘图标**」而不是「点气泡本体」：pystray 的 Win32 后端
+       只转发 `WM_LBUTTONUP` / `WM_RBUTTONUP`（`pystray/_win32.py::_on_notify`），
+       **不转发 `NIN_BALLOONUSERCLICK`** —— 「点气泡」在这条技术路线上做不到。
+       所以气泡文案写的是「单击托盘图标」，**不撒谎**。
+    ⚠️ 控制台模式（从终端/管道启动）没有托盘可言 → 打印一行 + 直接开页面。
+    """
+    text = "南苑抢课助手已经在运行了，无需重复启动。"
     url = f"http://127.0.0.1:{port}"
-    msg = (
-        "南苑抢课助手已经在运行了，无需重复启动。\n\n"
-        f"页面地址：{url}\n"
-        + (
-            "点「确定」后为你打开该页面；若浏览器没有反应，请稍后再手动访问。"
-            if open_page
-            else "（本次启动带了 --no-browser，不自动打开页面）"
+
+    if not open_page:
+        print(f"{text}（--no-browser：不打开页面）")
+        return
+    if not _WINDOWED or sys.platform != "win32":
+        print(text)
+        print(f"  页面地址：{url}（正在为你打开）")
+        _open_url(url)
+        return
+
+    try:
+        import threading
+
+        import pystray
+
+        def _open(icon, _item=None):
+            _open_url(url)
+            try:
+                icon.stop()
+            except Exception:
+                pass
+
+        def _quit(icon, _item=None):
+            try:
+                icon.stop()
+            except Exception:
+                pass
+
+        icon = pystray.Icon(
+            "nanyuan_xk_dup",
+            _tray_image(),
+            "南苑抢课助手 · 已在运行",
+            pystray.Menu(
+                pystray.MenuItem("打开页面", _open, default=True),
+                pystray.MenuItem("关闭提示", _quit),
+            ),
         )
-    )
-    if _WINDOWED and sys.platform == "win32":
-        try:
-            import ctypes
 
-            u32 = ctypes.windll.user32
-            u32.MessageBoxW.argtypes = [
-                ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint
-            ]
-            u32.MessageBoxW.restype = ctypes.c_int
-            MB_OK, MB_ICONINFORMATION, MB_TOPMOST, MB_SETFOREGROUND = (
-                0x0, 0x40, 0x40000, 0x10000,
-            )
-            # 阻塞直到用户点「确定」—— 就是要他先看见这句话，再带他去页面。
-            u32.MessageBoxW(
-                None, msg, "南苑抢课助手 · 已启动",
-                MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND,
-            )
-        except Exception:
-            print(msg)
-    else:
-        print(msg)
-    if open_page:
-        try:
-            import webbrowser
+        def _setup(ic):
+            ic.visible = True
+            try:
+                ic.notify(f"{text}\n单击托盘图标即可打开页面。", "南苑抢课助手 · 已启动")
+            except Exception:
+                pass
+            # ⚠️ 用 Timer 而不是在 setup 里 wait()：setup 跑在消息循环之前，
+            #    在那儿阻塞会让托盘图标点不动。
+            threading.Timer(_ALREADY_RUNNING_TRAY_TIMEOUT_S, _quit, args=(ic,)).start()
 
-            webbrowser.open(url)
-        except Exception:
-            pass
+        icon.run(setup=_setup)      # 阻塞，直到「打开页面」被点 / 超时
+    except Exception as e:
+        # 托盘不可用（pystray 缺失 / 建图标失败）→ 退化：打印 + 直接打开。
+        # 绝不因为「提示方式」失败就什么都不做。
+        print(text)
+        print(f"  页面地址：{url}（托盘提示不可用：{e}）")
+        _open_url(url)
 
-import uvicorn
+
+import uvicorn  # noqa: E402  —— 放在单实例代码之后，让「第二次启动」路径尽量早返回
 
 
 def local_ip() -> str:

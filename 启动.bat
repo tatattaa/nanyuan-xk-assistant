@@ -35,8 +35,14 @@ if errorlevel 1 (
 echo [START] Service starting, browser will open automatically...
 echo.
 
-REM Open browser after 2s delay
-start "" cmd /c "timeout /t 2 >nul & start http://127.0.0.1:8720"
+REM NOTE: do NOT pre-open the browser here (there used to be a
+REM       "timeout /t 2 & start http://127.0.0.1:8720" line).
+REM       serve.py opens the browser itself: first the JWC page, then the
+REM       assistant page in the same browser, keeping the assistant on top.
+REM       Pre-opening here would fire *before* serve.py's single-instance
+REM       check, so double-clicking twice would pop an extra tab first and
+REM       only then print "already running" -- the two entry points would
+REM       behave differently. Keep this file minimal: just run serve.py.
 
 REM --real: force real JWC
 "%PY%" serve.py --real --port 8720

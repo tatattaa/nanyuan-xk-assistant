@@ -7,7 +7,8 @@
 A. 源码层
    · 锁**按端口**命名 —— 🔴 绝不能做成「全局只准一个」，否则会把 8721/8731 的
      隔离测试实例一起锁死（那等于把测试体系拆掉）；
-   · 提示走 Windows 的 MessageBoxW；第二个实例返回**非 0** 退出码；
+   · 提示走**托盘气泡**（⭐ 用户明确要求「不弹框、别打断」），
+     单击托盘图标打开已运行实例的页面；第二个实例返回**非 0** 退出码；
    · 任何异常都放行（锁机制本身不许把程序拦死）。
 
 B. 函数级
@@ -63,11 +64,21 @@ expect("🔴 没写成「全局只准一个」的锁名（那会锁死隔离测�
        and 'CreateMutexW(None, False, "Local\\\\nanyuan-xk-assistant")' not in _src)
 expect("用 CreateMutexW（Windows 标准做法，进程退出内核自动释放）",
        "CreateMutexW" in _fn)
-expect("⭐ 提示走 MessageBoxW（双击场景下用户真能看见，不是只写日志）",
-       "MessageBoxW" in _src)
+expect("⭐⭐ 双击场景改用**托盘气泡**提示（不再用模态框打断用户）",
+       "pystray" in _src and "ic.notify(" in _src)
+expect("🔴 确认已经**没有** MessageBoxW（用户明确要求不弹框）",
+       "MessageBoxW" not in _src)
 expect("提示文案里说清「已经在运行」", "已经在运行" in _src)
 expect("⭐ 提示会把已运行实例的页面带出来（webbrowser.open）",
        "webbrowser.open" in _src)
+expect("⭐ 气泡文案写的是「单击**托盘图标**」——"
+       "pystray 不转发 NIN_BALLOONUSERCLICK，写成「点气泡」就是撒谎",
+       "单击托盘图标即可打开页面" in _src and "点气泡打开" not in _src)
+expect("⭐ 托盘提示有超时收摊（用户不理它，别在通知区留个没人管的图标）",
+       "icon.stop()" in _src and "threading.Timer(" in _src)
+expect("⚠️ 超时用 Timer 而不是在 setup 里 wait（setup 跑在消息循环之前，"
+       "在那儿阻塞会让托盘图标点不动）",
+       "def _setup(ic):" in _src and "done.wait(" not in _src)
 expect("第二个实例返回**非 0** 退出码（启动器 / 脚本能感知到）", "return 3" in _src)
 expect("⭐ 锁机制任何异常都放行（不许因为它自己出问题就起不来）",
        _fn.count("return True") >= 3, f"return True x{_fn.count('return True')}")
