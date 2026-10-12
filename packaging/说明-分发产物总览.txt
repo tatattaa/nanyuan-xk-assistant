@@ -1,0 +1,47 @@
+﻿南苑抢课助手 v1.1.0 —— 打包产物说明
+============================================================
+
+本目录按【打包形态】分成两个文件夹，各自带一份 说明.txt：
+
+  onedir-安装包版\        目录版（推荐）
+      ├─ 南苑抢课助手\             绿色版目录树（exe + _internal\ 依赖）
+      ├─ nfu-qk-v1.1.0-win64.zip   上面这个目录压成的压缩包（发给别人用）
+      ├─ nfu-qk-v1.1.0-setup.exe   安装包（装到 %LOCALAPPDATA%）
+      └─ 说明.txt
+
+  onefile-单文件版\       单文件版
+      ├─ 南苑抢课助手.exe          就一个文件，双击即用（启动慢约 25%）
+      └─ 说明.txt
+
+  logs\                   历史遗留（旧的运行日志目录），可删
+
+
+两版的关系
+------------------------------------------------------------
+【代码完全相同】，只有打包形态不同：
+
+  · onedir   启动快（启动时直接读目录），代价是要分发一个文件夹
+  · onefile  分发只有 1 个 exe，代价是每次启动都要解压 ~46 MB
+             到 %TEMP%\_MEIxxxxx\ 再删掉 → 慢约 25%
+
+同机实测（到 /api/state 就绪）：onefile 2,013 ms vs onedir 1,508 ms。
+本机 NVMe 上只差 0.5 s，在慢盘 / 带杀毒 / 虚拟机 / 共享文件夹里会明显放大。
+
+
+重新打包（在项目根执行）
+------------------------------------------------------------
+  # ① onedir（默认形态）
+  pyinstaller --noconfirm --clean --distpath "dist/onedir-安装包版" build.spec
+
+  # ② onefile（回滚形态）
+  #    Windows cmd:        set XK_ONEFILE=1 && pyinstaller --noconfirm --clean --distpath "dist/onefile-单文件版" build.spec
+  #    Git Bash:           XK_ONEFILE=1 pyinstaller --noconfirm --clean --distpath "dist/onefile-单文件版" build.spec
+
+  # ③ 安装包（源是 ① 的产物，所以必须排在 ① 之后）
+  "ISCC.exe" installer.iss          # 产物落在 dist\onedir-安装包版\
+
+  # ④ 压缩包（可装 7zip 或本仓 python 一行）
+
+⚠️ ①②【不能并行】—— 两者共用 build\ 工作目录，且形态切换必须先 --clean。
+⚠️ 两个 spec 分支共用同一份 excludes / hiddenimports（见 build.spec 注释），
+   别把它当冗余删掉：numpy/tzdata/setuptools 等是被 Pillow / pydantic 蹭进来的。

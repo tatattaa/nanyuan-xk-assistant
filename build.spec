@@ -2,8 +2,19 @@
 r"""PyInstaller 打包配置（南苑抢课助手 · 本地 Web 界面）。
 
 入口 = serve.py（本地 Web UI，默认 127.0.0.1:8720）。
-产出：**onedir** 目录 —— `dist/南苑抢课助手/`（内含 `南苑抢课助手.exe` + `_internal/`），
-     静态文件（ui/static/*）打包进 `_internal`。
+
+⭐⭐ **一份 spec 出两种形态**（2026-10-12 起），用环境变量 `XK_ONEFILE` 切换 ——
+   两版**代码完全相同**，只有打包形态不同（下面的 excludes / hiddenimports 共用一份）：
+
+    # ① onedir（默认，推荐）—— 目录树，启动快；配套 Inno 安装包
+    pyinstaller --noconfirm --clean --distpath "dist/onedir-安装包版" build.spec
+      → dist/onedir-安装包版/南苑抢课助手/{南苑抢课助手.exe, _internal/}
+
+    # ② onefile（单文件绿色版）—— 就一个 exe，分发最省事，但启动慢
+    XK_ONEFILE=1 pyinstaller --noconfirm --clean --distpath "dist/onefile-单文件版" build.spec
+      → dist/onefile-单文件版/南苑抢课助手.exe
+
+    静态文件（ui/static/*）两种形态都随包走。
 
 ⭐⭐ 为什么是 onedir 而不是 onefile（2026-10-12 改，实测依据见
    `.workbuddy/memory/2026-10-03.md` 第八十七/八十八轮）：
@@ -25,7 +36,12 @@ r"""PyInstaller 打包配置（南苑抢课助手 · 本地 Web 界面）。
    `--real` 正常跑真实教务。
 """
 
+import os
+
 from PyInstaller.utils.hooks import collect_submodules
+
+# ⭐ 形态开关：默认 onedir；`XK_ONEFILE=1` → 单文件。详见文件头。
+_ONEFILE = os.environ.get("XK_ONEFILE", "").strip().lower() in ("1", "true", "yes", "on")
 
 # uvicorn 有隐式导入的循环导入器，不显式收集会在打包后 import 失败
 hiddenimports = (
@@ -107,15 +123,8 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-# ⚠️ onedir 写法 = **两步**：
-#    ① `EXE(..., exclude_binaries=True)` —— 只产出启动器 exe，**不把 binaries/datas 塞进去**；
-#    ② `COLLECT(...)` —— 把 exe + binaries + datas 一起摆进 `dist/<name>/`。
-#    🔴 关键就是 ①，别漏：漏了 `exclude_binaries=True` 会打回 onefile（体积立刻回到 24 MB）。
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
+# EXE 的公共参数（两种形态共用）—— 唯一的区别是 binaries/datas 塞进 exe 还是摆成目录。
+_exe_kwargs = dict(
     name="南苑抢课助手",
     icon="assets/app.ico",  # exe 文件图标（assets/ 全套图标，gen_icon.py 生成）
     debug=False,
@@ -130,11 +139,31 @@ exe = EXE(
     entitlements_file=None,
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name="南苑抢课助手",
-)
+if _ONEFILE:
+    # —— ② onefile：binaries/datas 全塞进 exe，运行时自解压到 %TEMP%\_MEIxxxxx\ ——
+    #    ⚠️ exe 文件名**不带** `-onefile` 后缀是有意的：用户拿到的就是一个能双击的
+    #       「南苑抢课助手.exe」；形态由它所在的目录（`dist/onefile-单文件版/`）标记。
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        runtime_tmpdir=None,   # None = 用 %TEMP%\_MEIxxxxx（每轮都是新的随机目录）
+        **_exe_kwargs,
+    )
+else:
+    # —— ① onedir：**两步**写法 ——
+    #    ① `EXE(..., exclude_binaries=True)` —— 只产出启动器 exe，**不把 binaries/datas 塞进去**；
+    #    ② `COLLECT(...)` —— 把 exe + binaries + datas 一起摆进 `dist/<name>/`。
+    #    🔴 关键就是 ①，别漏：漏了 `exclude_binaries=True` 会打回 onefile（体积立刻回到 24 MB）。
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **_exe_kwargs)
+
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        name="南苑抢课助手",
+    )

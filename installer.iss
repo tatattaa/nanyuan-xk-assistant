@@ -1,6 +1,8 @@
 ﻿; ===========================================================================
 ;  南苑抢课助手 · Windows 安装包（Inno Setup 6）
-;  编译：ISCC.exe installer.iss     产物：dist\nfu-qk-v<版本>-setup.exe
+;  编译：ISCC.exe installer.iss
+;  产物：dist\onedir-安装包版\nfu-qk-v<版本>-setup.exe
+;  源：  dist\onedir-安装包版\南苑抢课助手\  ← **必须先跑 onedir 打包**（安装包只装 onedir 形态）
 ; ===========================================================================
 ;
 ;  🔴🔴 【装到哪】= %LOCALAPPDATA%\南苑抢课助手 —— **绝不要**改到 {pf}
@@ -24,7 +26,7 @@
 #define AppNameEn "nanyuan-xk-assistant"
 #define AppVersion "1.1.0"
 #define AppExe "南苑抢课助手.exe"
-#define AppSrc "dist\南苑抢课助手"
+#define AppSrc "dist\onedir-安装包版\南苑抢课助手"
 #define RepoURL "https://github.com/tatattaa/nanyuan-xk-assistant"
 
 [Setup]
@@ -49,7 +51,7 @@ AllowNoIcons=yes
 DisableProgramGroupPage=yes
 
 ; —— 产物 ——
-OutputDir=dist
+OutputDir=dist\onedir-安装包版
 OutputBaseFilename=nfu-qk-v{#AppVersion}-setup
 SetupIconFile=assets\app.ico
 UninstallDisplayIcon={app}\{#AppExe}

@@ -156,7 +156,19 @@
 
 日志写在 `logs/运行日志.log`（默认在程序目录；可用环境变量 `XK_LOG_DIR` 改位置）。
 
-### 方式三：源码运行（需 Python 3.10+）
+### 方式三：单文件版（就一个 exe，免安装）
+
+到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载单文件版的
+`南苑抢课助手.exe` —— **就这一个文件**，放到任意**可写**目录双击即可（无需安装、无需 Python）。
+
+> ⚠️ 单文件版每次启动都要把 ~46 MB 解压到 `%TEMP%\_MEIxxxxx\`、退出时再删掉同一个目录，
+> 所以**启动比目录版慢约 25%**。本机 NVMe 上只差 0.5 s，但在慢盘 / 带杀软 / 虚拟机 /
+> 共享文件夹里会明显放大 —— 图「只有一个文件」方便可以选它，在意启动速度就用方式一 / 二。
+>
+> ⚠️ 数据（`state/`、`logs/`）落在 **exe 同级目录** ⇒ 别把 exe 放进 `C:\Program Files`
+> 这类普通用户写不进去的位置。
+
+### 方式四：源码运行（需 Python 3.10+）
 
 ```bash
 # 1. 安装依赖（建议用 venv）
@@ -195,18 +207,30 @@ XK_SCHOOL_PROFILE=schools/你的学校.json python serve.py
 
 ## 打包成 exe
 
+**一份 spec 出两种形态**，用环境变量 `XK_ONEFILE` 切换（两版**代码完全相同**，只有打包形态不同）：
+
 ```bash
 pip install pyinstaller pystray pillow
 python gen_icon.py            # 生成图标（首次）
-pyinstaller build.spec --noconfirm
-# 本地构建产物：dist/南苑抢课助手/南苑抢课助手.exe（onedir，整个目录一起分发）
+
+# ① onedir（默认，推荐）—— 目录树，启动快
+pyinstaller --noconfirm --clean --distpath "dist/onedir-安装包版" build.spec
+#   → dist/onedir-安装包版/南苑抢课助手/{南苑抢课助手.exe, _internal/}
+
+# ② onefile（单文件绿色版）—— 就一个 exe，启动慢约 25%
+XK_ONEFILE=1 pyinstaller --noconfirm --clean --distpath "dist/onefile-单文件版" build.spec
+#   → dist/onefile-单文件版/南苑抢课助手.exe
 ```
+
+> ⚠️ **两个命令不能并行** —— 它们共用 `build/` 工作目录，且切换形态必须先 `--clean`。
 
 ### 再打成安装包（可选）
 
 ```bash
 # 需要 Inno Setup 6（winget install JRSoftware.InnoSetup）
-ISCC.exe installer.iss        # 产物：dist/nfu-qk-v1.1.0-setup.exe
+ISCC.exe installer.iss
+#   源   = dist/onedir-安装包版/南苑抢课助手/   ⇒ **必须先跑 ① onedir 打包**
+#   产物 = dist/onedir-安装包版/nfu-qk-v<版本>-setup.exe
 ```
 
 - `installer.iss` 里 `DefaultDirName={localappdata}\...` + `PrivilegesRequired=lowest`
@@ -214,14 +238,16 @@ ISCC.exe installer.iss        # 产物：dist/nfu-qk-v1.1.0-setup.exe
 - `installer/ChineseSimplified.isl` 让安装向导显示中文（Inno 官方发行版不带中文）。
 - 卸载**不删**用户 `state/`（Inno 只删自己安装的文件清单里的东西）。
 
-### 发布到 Releases
+### 分发产物
 
-```bash
-# 压缩包（免安装版）
-#   把 dist/南苑抢课助手/ 压成 nfu-qk-<版本>-win64.zip
-# 安装包
-#   dist/nfu-qk-<版本>-setup.exe
-```
+| 形态 | 文件 | 大小 |
+|---|---|---|
+| **安装包**（推荐） | `dist/onedir-安装包版/nfu-qk-v<版本>-setup.exe` | 17.9 MB |
+| 目录版绿色包 | `dist/onedir-安装包版/nfu-qk-v<版本>-win64.zip` | 21.6 MB |
+| 单文件版 | `dist/onefile-单文件版/南苑抢课助手.exe` | 21.8 MB |
+
+每个文件夹里都有一份 `说明.txt`（可直接连着发给别人）。
+📁 `packaging/` 存着这几份说明的**源文件** —— 重新打包后复制进 `dist/` 对应位置即可。
 
 > 用 **onedir** 而不是 onefile 是实测决定：onefile 每次启动要把 ~46 MB 解压到
 > `%TEMP%\_MEIxxxxx\`、退出时再删掉，而每一轮都是**新的随机目录**（吃不到系统
