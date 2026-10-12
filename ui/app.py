@@ -29,6 +29,8 @@
     POST /api/stop            停止抢课
     GET  /api/events          增量拉取事件（?since=N）
     GET  /api/events/stream   SSE 实时事件流
+    POST /api/notify          请主实例用它自己的托盘图标弹一条气泡（只接受本机调用；
+                              供「第二次启动」的实例借用，免得通知区多一个图标）
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ import sys
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -192,6 +194,18 @@ class WaitBody(BaseModel):
     base_version: int | None = None
 
 
+class NotifyBody(BaseModel):
+    """「请主实例弹一条托盘气泡」请求（2026-10-12）。
+
+    ⭐ 为什么要走接口而不是第二个进程自己建图标：
+       第二次启动的实例**不该自建托盘图标** —— pystray 的 `Icon` 就是「通知区里的
+       一个图标」，为了弹一次气泡而新建一个，通知区就会**多出一个图标**留在那里
+       （2026-10-12 用户反馈）。正解 = 让**已经在跑的那个实例用它自己的图标**弹。
+    """
+    title: str = "南苑抢课助手 · 已启动"
+    text: str = ""
+
+
 class DropBody(BaseModel):
     """退课请求。
 
@@ -257,6 +271,28 @@ def _access_key() -> str:
     return os.environ.get("XK_ACCESS_KEY", "").strip()
 
 
+# -- 托盘通知出口（2026-10-12）-----------------------------------------------
+#: `serve.py` 在**托盘图标就绪之后**注入：`fn(title, text)` → 用主实例的托盘图标弹气泡。
+#: `None` = 本实例没有托盘（从终端/管道启动、或 pystray 不可用）→ `/api/notify` 返回
+#: `{"ok": false, "reason": "no_tray"}`，调用方自己决定怎么退化。
+_NOTIFY_SINK = None
+
+
+def set_notify_sink(fn) -> None:
+    """注入「弹一条托盘气泡」的实现（由 `serve.py` 调用）。
+
+    ⭐ 存在的理由：第二次启动的实例不该为了一次提示**新建托盘图标**（那会在通知区
+       多留一个图标）。让它 POST 到主实例，由主实例**已经有的**那个图标去弹。
+    """
+    global _NOTIFY_SINK
+    _NOTIFY_SINK = fn
+
+
+#: `/api/notify` 只接受这些来源 —— 它是「本机第二个实例请主实例弹气泡」的通道，
+#: 绑定 `--lan` 时**不能**让同网段的人拿它刷气泡。
+_LOOPBACK_HOSTS = ("127.0.0.1", "::1", "localhost")
+
+
 def _tab_kklxdm(sess, tab_index: int) -> str:
     """按 Tab 下标取课程类别代码（取不到返回空）。
 
@@ -303,7 +339,11 @@ def create_app() -> FastAPI:
     async def _guard(request, call_next):
         path = request.url.path
         if _key and path.startswith("/api/"):
-            if path not in ("/api/access/status", "/api/access/verify", "/api/presence"):
+            # ⭐ 另放行 /api/notify（2026-10-12）：第二次启动的实例只会 POST 一句
+            #   「请弹个气泡」，它拿不到口令（口令只在主实例的环境里）；该接口只回
+            #   {ok}、只弹气泡、且**只接受本机来源**（见 notify() 里的校验），泄不了数据。
+            if path not in ("/api/access/status", "/api/access/verify",
+                            "/api/presence", "/api/notify"):
                 supplied = request.headers.get("x-access-key", "")
                 if not supplied:
                     supplied = request.query_params.get("key", "")
@@ -325,6 +365,32 @@ def create_app() -> FastAPI:
         if _key and supplied == _key:
             return {"ok": True}
         return {"ok": False}
+
+    # -- 托盘气泡：让**本机的第二个实例**借用主实例的托盘图标弹一次提示 ----------
+    @app.post("/api/notify")
+    def notify(body: NotifyBody, request: Request):
+        """请主实例用它**自己的**托盘图标弹一条气泡。
+
+        🔴 为什么要有这个接口：pystray 的 `Icon` 就是「通知区里的一个图标」，
+           第二个实例为了弹一次气泡而自建一个图标，通知区就会**多出一个图标**
+           （2026-10-12 用户反馈）。改成「借主实例的图标弹」，第二个实例
+           POST 完就能立刻退出 —— 通知区不多图标、也不留一个空转 30s 的进程。
+
+        ⚠️ 只接受**本机**来源：它是给同机的第二个实例用的，不是给局域网用的
+           （`--lan` 绑 0.0.0.0 时，别人不该能拿它在你机器上刷气泡）。
+        """
+        host = (request.client.host if request.client else "") or ""
+        if host not in _LOOPBACK_HOSTS:
+            raise HTTPException(403, "只允许本机调用")
+        if _NOTIFY_SINK is None:
+            # 本实例没有托盘（终端/管道启动，或 pystray 不可用）→ 让调用方自己退化。
+            return {"ok": False, "reason": "no_tray"}
+        try:
+            _NOTIFY_SINK(body.title, body.text)
+        except Exception as e:                     # noqa: BLE001 —— 弹不出气泡不算错误
+            logger.warning("托盘气泡发送失败：%s", e)
+            return {"ok": False, "reason": "notify_failed"}
+        return {"ok": True}
 
     # -- 页面 ---------------------------------------------------------------
 

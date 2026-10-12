@@ -175,10 +175,6 @@ def _try_acquire_single_instance(port: int) -> bool:
     return True
 
 
-#: 第二个实例的托盘提示最多等多久（秒）—— 用户不理它就别在托盘里留个没人管的图标。
-_ALREADY_RUNNING_TRAY_TIMEOUT_S = 30.0
-
-
 def _open_url(url: str) -> None:
     """尽力打开浏览器；失败不抛（打不开页面不该让程序崩）。"""
     try:
@@ -189,75 +185,66 @@ def _open_url(url: str) -> None:
         pass
 
 
+def _ask_running_instance_to_notify(port: int, title: str, text: str) -> bool:
+    """请**已经在跑的那个实例**用它自己的托盘图标弹一条气泡。True = 已送达。
+
+    ⭐ 为什么不自己弹（2026-10-12 用户反馈后改的）：
+        pystray 的 `Icon` 就是「通知区里的一个图标」。第二个实例为了弹一次气泡
+        而**新建一个图标**，通知区就会**多出一个重复图标**留在那儿（原来的实现要
+        空转 30s 才收摊）。改成借主实例的图标弹 —— 这里 POST 完就能立刻退出：
+        通知区不多图标、也不留一个空转进程。
+
+    ⚠️ 失败不抛：主实例可能是**旧版本**（没这个接口）、也可能压根没托盘。
+       返回 False，由调用方自己决定怎么退化。
+    """
+    try:
+        import json
+        import urllib.request
+
+        body = json.dumps({"title": title, "text": text}).encode("utf-8")
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/notify",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        # ⚠️ 显式绕开代理：打 127.0.0.1 走代理会被拦成 502（本机踩过）。
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(req, timeout=5) as resp:
+            return bool(json.loads(resp.read() or b"{}").get("ok"))
+    except Exception:
+        return False
+
+
 def _notify_already_running(port: int, *, open_page: bool) -> None:
-    """第二次启动：**托盘气泡**提示「已经在跑了」，单击托盘图标就把页面带出来。
+    """第二次启动：**请主实例弹托盘气泡**提示「已经在跑了」，自己立刻退出。
 
     ⚠️ 为什么不用 MessageBox（2026-10-12 用户要求改掉）：模态框会**打断**用户 ——
        他只是想再打开一次页面，却得先点掉一个对话框。
+    ⚠️ 为什么**不自己建托盘图标**（2026-10-12 用户反馈后改）：pystray 的 `Icon`
+       就是「通知区里的一个图标」，自建一个会让通知区**多出一个重复图标**；
+       而且为了显示它还得让这个进程空转。正解 = 借主实例**已有**的图标弹。
     ⚠️ 为什么是「单击**托盘图标**」而不是「点气泡本体」：pystray 的 Win32 后端
        只转发 `WM_LBUTTONUP` / `WM_RBUTTONUP`（`pystray/_win32.py::_on_notify`），
        **不转发 `NIN_BALLOONUSERCLICK`** —— 「点气泡」在这条技术路线上做不到。
        所以气泡文案写的是「单击托盘图标」，**不撒谎**。
-    ⚠️ 控制台模式（从终端/管道启动）没有托盘可言 → 打印一行 + 直接开页面。
     """
     text = "南苑抢课助手已经在运行了，无需重复启动。"
     url = f"http://127.0.0.1:{port}"
+    tip = f"{text}\n单击托盘图标即可打开页面。"
 
     if not open_page:
         print(f"{text}（--no-browser：不打开页面）")
         return
-    if not _WINDOWED or sys.platform != "win32":
-        print(text)
-        print(f"  页面地址：{url}（正在为你打开）")
-        _open_url(url)
-        return
 
-    try:
-        import threading
+    if _ask_running_instance_to_notify(port, "南苑抢课助手 · 已启动", tip):
+        return                                    # 主实例已经把气泡弹出来了，收工
 
-        import pystray
-
-        def _open(icon, _item=None):
-            _open_url(url)
-            try:
-                icon.stop()
-            except Exception:
-                pass
-
-        def _quit(icon, _item=None):
-            try:
-                icon.stop()
-            except Exception:
-                pass
-
-        icon = pystray.Icon(
-            "nanyuan_xk_dup",
-            _tray_image(),
-            "南苑抢课助手 · 已在运行",
-            pystray.Menu(
-                pystray.MenuItem("打开页面", _open, default=True),
-                pystray.MenuItem("关闭提示", _quit),
-            ),
-        )
-
-        def _setup(ic):
-            ic.visible = True
-            try:
-                ic.notify(f"{text}\n单击托盘图标即可打开页面。", "南苑抢课助手 · 已启动")
-            except Exception:
-                pass
-            # ⚠️ 用 Timer 而不是在 setup 里 wait()：setup 跑在消息循环之前，
-            #    在那儿阻塞会让托盘图标点不动。
-            threading.Timer(_ALREADY_RUNNING_TRAY_TIMEOUT_S, _quit, args=(ic,)).start()
-
-        icon.run(setup=_setup)      # 阻塞，直到「打开页面」被点 / 超时
-    except Exception as e:
-        # 托盘不可用（pystray 缺失 / 建图标失败）→ 退化：打印 + 直接打开。
-        # 绝不因为「提示方式」失败就什么都不做。
-        print(text)
-        print(f"  页面地址：{url}（托盘提示不可用：{e}）")
-        _open_url(url)
-
+    # 主实例没有托盘（终端启动 / pystray 不可用）/ 是没这个接口的旧版本 →
+    # 退化成最直接的做法：把这页面给他打开。绝不因为「提示方式」失败就什么都不做。
+    print(text)
+    print(f"  页面地址：{url}（正在为你打开）")
+    _open_url(url)
 
 import uvicorn  # noqa: E402  —— 放在单实例代码之后，让「第二次启动」路径尽量早返回
 
@@ -776,6 +763,17 @@ def main() -> int:
         threading.Timer(2.0, lambda: os._exit(0)).start()
 
     icon = _make_tray_icon(a.port, _stop_all)
+
+    # ⭐ 把「弹托盘气泡」这件事接到**主实例自己这个图标**上（2026-10-12）。
+    #   第二次启动的那个进程会 POST /api/notify 来这里 —— 于是通知区用的是
+    #   本来就在的那个图标，**不会多出一个重复图标**。
+    if icon is not None:
+        try:
+            from ui.app import set_notify_sink
+
+            set_notify_sink(lambda title, text: icon.notify(text, title))
+        except Exception as e:
+            print(f"  ⚠️ 托盘通知出口未接上：{e}")
 
     # ⭐ 关闭浏览器 → 自动退出后端（仅窗口模式；源码/控制台模式不动）。
     #   见 _browser_watchdog 的设计说明：宽限期 + 有任务先提醒。
