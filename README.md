@@ -126,19 +126,37 @@
 
 ## 快速开始
 
-### 方式一：直接跑 exe（Windows，无需 Python）
+### 方式一：安装包（Windows，推荐）
 
-1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载最新版压缩包（文件名形如 `nfu-qk-v1.1.0-win64.zip`）；
-2. **解压到任意本地目录**（⚠️ 别放在网盘同步目录或虚拟机共享文件夹里运行，会非常慢）；
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载 `nfu-qk-v1.1.0-setup.exe`（约 18 MB）；
+2. 双击安装 —— 默认装到 **`%LOCALAPPDATA%\南苑抢课助手\`**，**不需要管理员权限**（不弹 UAC）；
+3. 从开始菜单启动「南苑抢课助手」（安装时可勾选创建桌面快捷方式，默认不勾）；
+4. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
+
+> 🔴 **为什么装到用户目录而不是 `C:\Program Files`**：本程序把 `state/`（选课清单 /
+> 蹲课清单 / 课程快照）和 `logs/`（运行日志）写在 **exe 同级目录**，而 `Program Files`
+> 对普通用户是只读的 ⇒ 日志文件打不开、清单写不进。实测把产物放进只读目录双击，
+> **直接弹「Unhandled exception in script」，服务 16–19 秒都起不来**。
+> 安装包已把目录锁死在用户目录（向导里不提供改目录的页面），不建议手改。
+
+**卸载**：设置 → 应用 → 南苑抢课助手（或开始菜单里的「卸载 南苑抢课助手」）。
+**卸载不会删除你的数据** —— `state/` 和 `logs/` 会保留在 `%LOCALAPPDATA%\南苑抢课助手\`，
+卸载完成时会弹窗告知路径。
+
+### 方式二：绿色压缩包（免安装，Windows）
+
+1. 到 [Releases 页面](https://github.com/tatattaa/nanyuan-xk-assistant/releases/latest)下载压缩包（文件名形如 `nfu-qk-v1.1.0-win64.zip`）；
+2. **解压到任意本地目录**（⚠️ 别放在网盘同步目录或虚拟机共享文件夹里运行，会非常慢；
+   ⚠️ 也别解压到需要管理员权限才能写入的目录，理由同上）；
 3. 双击目录里的 `南苑抢课助手.exe`（无黑窗，托盘图标提供「打开助手 / 停止服务」）；
 4. 浏览器自动打开 `http://127.0.0.1:8720`，输入学号密码登录即可。
 
-> 打包形态是 **onedir**（一个目录）而不是单文件 —— 单文件每次启动都要把 ~46 MB
-> 解压到 `%TEMP%` 再删除，实测慢约 **25%**，在带杀软扫描的机器上差距更大。
+> 两种 Windows 分发包的打包形态都是 **onedir**（一个目录）而不是单文件 —— 单文件每次
+> 启动都要把 ~46 MB 解压到 `%TEMP%` 再删除，实测慢约 **25%**，带杀软扫描的机器差距更大。
 
 日志写在 `logs/运行日志.log`（默认在程序目录；可用环境变量 `XK_LOG_DIR` 改位置）。
 
-### 方式二：源码运行（需 Python 3.10+）
+### 方式三：源码运行（需 Python 3.10+）
 
 ```bash
 # 1. 安装依赖（建议用 venv）
@@ -182,7 +200,27 @@ pip install pyinstaller pystray pillow
 python gen_icon.py            # 生成图标（首次）
 pyinstaller build.spec --noconfirm
 # 本地构建产物：dist/南苑抢课助手/南苑抢课助手.exe（onedir，整个目录一起分发）
-# 发布到 Releases 时把 dist/南苑抢课助手/ 压成 nfu-qk-<版本>-win64.zip
+```
+
+### 再打成安装包（可选）
+
+```bash
+# 需要 Inno Setup 6（winget install JRSoftware.InnoSetup）
+ISCC.exe installer.iss        # 产物：dist/nfu-qk-v1.1.0-setup.exe
+```
+
+- `installer.iss` 里 `DefaultDirName={localappdata}\...` + `PrivilegesRequired=lowest`
+  + `DisableDirPage=yes` 是**一组刻意设置**，见文件顶部注释 —— 别改成 `{pf}`。
+- `installer/ChineseSimplified.isl` 让安装向导显示中文（Inno 官方发行版不带中文）。
+- 卸载**不删**用户 `state/`（Inno 只删自己安装的文件清单里的东西）。
+
+### 发布到 Releases
+
+```bash
+# 压缩包（免安装版）
+#   把 dist/南苑抢课助手/ 压成 nfu-qk-<版本>-win64.zip
+# 安装包
+#   dist/nfu-qk-<版本>-setup.exe
 ```
 
 > 用 **onedir** 而不是 onefile 是实测决定：onefile 每次启动要把 ~46 MB 解压到

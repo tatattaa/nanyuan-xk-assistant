@@ -18,6 +18,7 @@ import logging
 import os
 import socket
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -113,25 +114,63 @@ _MAX_LOG_BYTES = 1 * 1024 * 1024
 _MAX_LOG_FILES = 3
 
 
-def _open_runtime_log() -> object:
-    """打开轮转日志文件：超过上限先把最旧的滚掉，再以追加方式打开。"""
-    path = _runtime_log_path()
-    if path.exists() and path.stat().st_size >= _MAX_LOG_BYTES:
-        oldest = path.with_name(f"{path.name}.{_MAX_LOG_FILES - 1}")
-        if oldest.exists():
+def _log_candidates() -> list[Path]:
+    """「日志文件」的候选路径，按优先级。
+
+    首选是应用根的 `logs/`（正常运行时的位置）；后面两个是**只读目录兜底**：
+    程序被塞进 `C:\\Program Files` 这类不可写位置时，主路径 `open()` 会失败，
+    退到用户目录 / 临时目录，至少让日志有地方落、程序不至于崩。
+    """
+    cands: list[Path] = [_runtime_log_path()]
+    la = os.environ.get("LOCALAPPDATA")
+    if la:
+        cands.append(Path(la) / "南苑抢课助手" / "logs" / "运行日志.log")
+    cands.append(Path(tempfile.gettempdir()) / "南苑抢课助手" / "logs" / "运行日志.log")
+    return cands
+
+
+def _rotate_log(path: Path) -> None:
+    """超过上限就把最旧的滚掉（.log → .log.1 → .log.2）；任何失败一律忽略。"""
+    try:
+        too_big = path.exists() and path.stat().st_size >= _MAX_LOG_BYTES
+    except OSError:
+        too_big = False
+    if not too_big:
+        return
+    oldest = path.with_name(f"{path.name}.{_MAX_LOG_FILES - 1}")
+    if oldest.exists():
+        try:
+            oldest.unlink()
+        except OSError:
+            pass
+    for i in range(_MAX_LOG_FILES - 2, -1, -1):
+        src = path if i == 0 else path.with_name(f"{path.name}.{i}")
+        dst = path.with_name(f"{path.name}.{i + 1}")
+        if src.exists():
             try:
-                oldest.unlink()
+                src.replace(dst)
             except OSError:
                 pass
-        for i in range(_MAX_LOG_FILES - 2, -1, -1):
-            src = path if i == 0 else path.with_name(f"{path.name}.{i}")
-            dst = path.with_name(f"{path.name}.{i + 1}")
-            if src.exists():
-                try:
-                    src.replace(dst)
-                except OSError:
-                    pass
-    return open(path, "a", encoding="utf-8", buffering=1)
+
+
+def _open_runtime_log() -> object:
+    """打开轮转日志文件（追加写）。
+
+    🔴 **本函数在「模块导入期」就被调用，绝不能抛异常**（2026-10-12 实测踩到）：
+      把程序放进 `C:\\Program Files` 这类**只读目录**（安装包默认位置）时，
+      `_runtime_log_path()` 给出的路径 `open()` 抛 `PermissionError`；
+      windowed（双击）模式下这异常没人接 → PyInstaller 直接弹
+      「Unhandled exception in script」，**程序连界面都出不来**。
+      ⇒ 逐个候选路径试过去；全失败就退到 `os.devnull`（日志没了，但程序活着）。
+    """
+    for path in _log_candidates():
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _rotate_log(path)
+            return open(path, "a", encoding="utf-8", buffering=1)
+        except OSError:
+            continue
+    return open(os.devnull, "w", encoding="utf-8")
 
 
 if sys.stdout is None or sys.stderr is None:
