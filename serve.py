@@ -103,6 +103,119 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+
+# ===========================================================================
+# 单实例：**同一个端口只允许一个进程**
+# ===========================================================================
+# 需求（2026-10-12 用户提出）：exe 重复双击时不要再起一个实例，而是提示
+# 「已经启动了」并把页面带出来。旧行为是第二个实例闷头去抢端口 / 再开一遍
+# 浏览器 / 多出一个托盘图标，用户看到的是「点了没反应 + 浏览器多开」。
+#
+# 🔴 **必须按端口锁，不能做成「全局只准一个」**：本程序本来就支持多实例并存
+#    —— 落盘目录按端口隔离（见 `pick_state_dir`），自检脚本会另起 8721/8731 的
+#    隔离实例。全局锁会把它们一并锁死，等于把测试体系拆掉。**真正的冲突源是端口**。
+#
+# ⚠️ 为什么不拿「连一下端口通不通」当判据：那样分不清「是**本程序**在跑」还是
+#    「别的程序恰好占了这个端口」。后者应当由 uvicorn 老实报「端口被占用」，
+#    而不是弹一句「已启动」把用户引到一个**根本不是我们的**页面上。
+#
+# 🔴 任何异常都返回 True（放行）：单实例是**体验优化**，绝不能因为它自己
+#    出问题就让程序起不来。
+_SINGLE_INSTANCE_HANDLE: object | None = None   # ⚠️ 必须留引用，被 GC 掉锁就没了
+_ERROR_ALREADY_EXISTS = 183                     # ERROR_ALREADY_EXISTS
+
+
+def _try_acquire_single_instance(port: int) -> bool:
+    """占住这个端口的单实例锁。True = 可以启动；False = 该端口已有实例在跑。"""
+    global _SINGLE_INSTANCE_HANDLE
+
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateMutexW.restype = wintypes.HANDLE
+            k32.CreateMutexW.argtypes = [wintypes.LPCVOID, wintypes.BOOL, wintypes.LPCWSTR]
+            # 「Local\」= 当前登录会话；换用户登录各持一份（桌面程序够用，
+            # 且不需要创建全局对象所需的额外权限）
+            name = f"Local\\nanyuan-xk-assistant-port-{port}"
+            handle = k32.CreateMutexW(None, False, name)
+            err = ctypes.get_last_error()
+            if not handle:
+                return True                      # 建不出来就放行，别拦着自己
+            if err == _ERROR_ALREADY_EXISTS:
+                k32.CloseHandle(handle)
+                return False
+            _SINGLE_INSTANCE_HANDLE = handle     # 持有到进程结束
+            return True
+        except Exception:
+            return True
+
+    # 非 Windows（Linux / macOS / Git Bash 里的非 Windows Python）：lock 文件 + flock。
+    # 进程退出（含被 kill）时由内核自动释放。
+    try:
+        import fcntl
+        import tempfile
+    except ImportError:
+        return True
+    try:
+        f = open(Path(tempfile.gettempdir()) / f"nanyuan-xk-assistant-{port}.lock", "w")
+    except Exception:
+        return True
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return False
+    except Exception:
+        f.close()
+        return True
+    _SINGLE_INSTANCE_HANDLE = f
+    return True
+
+
+def _notify_already_running(port: int, *, open_page: bool) -> None:
+    """第二次启动：把「已经在跑了」讲清楚，并把那个页面带出来。"""
+    url = f"http://127.0.0.1:{port}"
+    msg = (
+        "南苑抢课助手已经在运行了，无需重复启动。\n\n"
+        f"页面地址：{url}\n"
+        + (
+            "点「确定」后为你打开该页面；若浏览器没有反应，请稍后再手动访问。"
+            if open_page
+            else "（本次启动带了 --no-browser，不自动打开页面）"
+        )
+    )
+    if _WINDOWED and sys.platform == "win32":
+        try:
+            import ctypes
+
+            u32 = ctypes.windll.user32
+            u32.MessageBoxW.argtypes = [
+                ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint
+            ]
+            u32.MessageBoxW.restype = ctypes.c_int
+            MB_OK, MB_ICONINFORMATION, MB_TOPMOST, MB_SETFOREGROUND = (
+                0x0, 0x40, 0x40000, 0x10000,
+            )
+            # 阻塞直到用户点「确定」—— 就是要他先看见这句话，再带他去页面。
+            u32.MessageBoxW(
+                None, msg, "南苑抢课助手 · 已启动",
+                MB_OK | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND,
+            )
+        except Exception:
+            print(msg)
+    else:
+        print(msg)
+    if open_page:
+        try:
+            import webbrowser
+
+            webbrowser.open(url)
+        except Exception:
+            pass
+
 import uvicorn
 
 
@@ -439,6 +552,15 @@ def main() -> int:
     if a.real and a.mock:
         print("✗ --real 与 --mock 互斥，二选一")
         return 2
+
+    # -- 单实例：同一端口只准一个进程（2026-10-12 用户需求）------------------
+    # 重复双击 exe 时不要再起第二个（会去抢端口、再开一遍浏览器、多一个托盘图标），
+    # 而是明确告诉他「已经在跑了」并把这个页面带出来。
+    # ⚠️ 放在最前面：都确定要退出了，就没必要再清理环境变量 / 建日志 / 起假教务。
+    if not _try_acquire_single_instance(a.port):
+        _notify_already_running(a.port, open_page=not a.no_browser)
+        print(f"✗ 端口 {a.port} 上已经有一个实例在运行了，本次启动直接退出。")
+        return 3
 
     # --real：把可能残留的「指向假教务」的环境变量清掉，确保打真实教务。
     # 这是防呆：XK_SCHOOL_URL 是进程级变量，若被留在 shell 里，
